@@ -1,0 +1,119 @@
+const SMART_ADS_CAMPAIGNS_KEY = "ledgerly:smartAdsCampaigns.v1";
+
+function canUseStorage() {
+  return typeof window !== "undefined" && Boolean(window.localStorage);
+}
+
+function safeParse(value, fallback) {
+  try {
+    return JSON.parse(value) || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function createId() {
+  if (globalThis.crypto?.randomUUID) return `smart-ad-${globalThis.crypto.randomUUID()}`;
+  return `smart-ad-${Date.now()}-${Math.round(Math.random() * 100000)}`;
+}
+
+function toNumber(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function readCampaigns() {
+  if (!canUseStorage()) return [];
+  return safeParse(window.localStorage.getItem(SMART_ADS_CAMPAIGNS_KEY), []);
+}
+
+function writeCampaigns(campaigns) {
+  if (!canUseStorage()) return;
+  window.localStorage.setItem(SMART_ADS_CAMPAIGNS_KEY, JSON.stringify(campaigns));
+}
+
+export function normalizeSmartAdsCampaign(campaign = {}) {
+  const now = new Date().toISOString();
+  const dailyBudget = toNumber(campaign.budget?.dailyBudget);
+  const durationDays = Math.max(toNumber(campaign.budget?.durationDays), 0);
+
+  return {
+    id: campaign.id || createId(),
+    name: campaign.name || "Untitled Campaign",
+    objective: campaign.objective || "whatsapp",
+    creative: {
+      creativeType: campaign.creative?.creativeType || "upload",
+      uploadDataUrl: campaign.creative?.uploadDataUrl || "",
+      uploadName: campaign.creative?.uploadName || "",
+      templateId: campaign.creative?.templateId || null,
+      sessionDesignId: campaign.creative?.sessionDesignId || null,
+      itemId: campaign.creative?.itemId || null,
+      imageUrl: campaign.creative?.imageUrl || "",
+    },
+    ad: {
+      headline: campaign.ad?.headline || "",
+      caption: campaign.ad?.caption || "",
+      website: campaign.ad?.website || "",
+      cta: campaign.ad?.cta || "Send WhatsApp Message",
+    },
+    audience: {
+      gender: campaign.audience?.gender || "All",
+      minAge: toNumber(campaign.audience?.minAge) || 18,
+      maxAge: toNumber(campaign.audience?.maxAge) || 65,
+      locations: Array.isArray(campaign.audience?.locations) ? campaign.audience.locations.filter(Boolean) : [],
+      panIndia: Boolean(campaign.audience?.panIndia),
+      interests: Array.isArray(campaign.audience?.interests) ? campaign.audience.interests.filter(Boolean) : [],
+    },
+    budget: {
+      dailyBudget,
+      startDate: campaign.budget?.startDate || "",
+      endDate: campaign.budget?.endDate || "",
+      durationDays,
+      estimatedBudget: dailyBudget * durationDays,
+    },
+    schedule: {
+      mode: campaign.schedule?.mode || "all-day",
+      startTime: campaign.schedule?.startTime || "",
+      endTime: campaign.schedule?.endTime || "",
+    },
+    status: campaign.status || "draft",
+    analytics: {
+      reach: toNumber(campaign.analytics?.reach),
+      clicks: toNumber(campaign.analytics?.clicks),
+      spend: toNumber(campaign.analytics?.spend),
+      leads: toNumber(campaign.analytics?.leads),
+    },
+    meta: {
+      connectionStatus: campaign.meta?.connectionStatus || "not-connected",
+      campaignId: campaign.meta?.campaignId || campaign.meta?.metaCampaignId || null,
+      adSetId: campaign.meta?.adSetId || campaign.meta?.metaAdSetId || null,
+      imageHash: campaign.meta?.imageHash || campaign.meta?.metaImageHash || null,
+      creativeId: campaign.meta?.creativeId || campaign.meta?.metaCreativeId || null,
+      adId: campaign.meta?.adId || campaign.meta?.metaAdId || null,
+      publishStatus: campaign.meta?.publishStatus || "",
+      lastError: campaign.meta?.lastError || "",
+      createdAt: campaign.meta?.createdAt || null,
+      steps: Array.isArray(campaign.meta?.steps) ? campaign.meta.steps : [],
+    },
+    createdAt: campaign.createdAt || now,
+    updatedAt: now,
+  };
+}
+
+export function getSmartAdsCampaigns() {
+  return readCampaigns().map((campaign) => normalizeSmartAdsCampaign(campaign));
+}
+
+export function saveSmartAdsCampaign(campaign) {
+  const normalizedCampaign = normalizeSmartAdsCampaign(campaign);
+  const campaigns = readCampaigns();
+  const exists = campaigns.some((current) => current.id === normalizedCampaign.id);
+  const nextCampaigns = exists
+    ? campaigns.map((current) => (current.id === normalizedCampaign.id ? normalizedCampaign : current))
+    : [normalizedCampaign, ...campaigns];
+
+  writeCampaigns(nextCampaigns);
+  return normalizedCampaign;
+}
+
+export const smartAdsCampaignsStorageKey = SMART_ADS_CAMPAIGNS_KEY;
