@@ -19,12 +19,16 @@ import AddSale from "./pages/Sales/AddSale";
 import SalePreview from "./pages/Sales/SalePreview";
 import SaleInvoices from "./pages/Sales/SaleInvoices";
 import BarcodeGenerator from "./pages/Utilities/BarcodeGenerator";
+import { DataDeletion, PrivacyPolicy, TermsOfService } from "./pages/Legal/LegalPages";
 
 function App() {
   return (
     <BrowserRouter>
       <Routes>
         <Route path="/store/:storeId" element={<CustomerStorefront />} />
+        <Route path="/privacy-policy" element={<PrivacyPolicy />} />
+        <Route path="/terms" element={<TermsOfService />} />
+        <Route path="/data-deletion" element={<DataDeletion />} />
         <Route path="/" element={<MainLayout />}>
           <Route index element={<Home />} />
           <Route path="dashboard" element={<Dashboard />} />
