@@ -125,6 +125,7 @@ Smart Ads Dashboard
 - Create Campaign on Review publishes real Meta Campaign, Ad Set, image, Creative, and Ad in paused state.
 - Selected real Facebook Page and real Ad Account are required before publishing.
 - Campaign creation explicitly disables ad-set budget sharing because Smart Ads keeps daily budget on the Ad Set.
+- Ad Set schedule dates are normalized server-side at publish time so stale/today 1-day campaigns keep a future end time.
 - Publish failures now surface the exact failed Meta step plus safe code/subcode/user message/fbtrace details.
 - Placeholder website URLs are blocked before Meta object creation.
 - Uploaded, item, Marketing Studio, and session design images are converted to publishable image data before backend upload.

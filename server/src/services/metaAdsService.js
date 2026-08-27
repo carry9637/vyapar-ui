@@ -1,6 +1,9 @@
+import { Buffer } from "node:buffer";
 import { graphGet, graphPost, normalizeMetaError } from "./metaOAuthService.js";
 
 const SAFE_STATUS = "PAUSED";
+const MIN_START_BUFFER_MS = 10 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
 const ZERO_DECIMAL_CURRENCIES = new Set(["BIF", "CLP", "DJF", "GNF", "JPY", "KMF", "KRW", "MGA", "PYG", "RWF", "UGX", "VND", "VUV", "XAF", "XOF", "XPF"]);
 
 function createPublishError(message, code = "META_PUBLISH_ERROR", publishResult = null) {
@@ -42,9 +45,41 @@ function dailyBudgetToMinorUnits(value, currency = "INR") {
   return Math.max(1, Math.round(amount * (ZERO_DECIMAL_CURRENCIES.has(String(currency).toUpperCase()) ? 1 : 100)));
 }
 
-function metaDateTime(dateValue = "", endOfDay = false) {
-  if (!dateValue) throw createPublishError("Start and end dates are required before publishing.", "META_DATE_REQUIRED");
-  return `${dateValue}T${endOfDay ? "23:59:59" : "00:00:00"}+0000`;
+function parseDateTimeUtc(dateValue = "", timeValue = "00:00") {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(dateValue))) return null;
+  const safeTime = /^\d{2}:\d{2}$/.test(String(timeValue)) ? timeValue : "00:00";
+  const parsed = new Date(`${dateValue}T${safeTime}:00.000Z`);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function metaTimestamp(date) {
+  return date.toISOString().replace(".000Z", "+0000");
+}
+
+function buildMetaSchedule(campaign = {}, now = new Date()) {
+  const durationDays = Math.max(Math.ceil(Number(campaign.budget?.durationDays) || 1), 1);
+  const scheduleMode = campaign.schedule?.mode || "all-day";
+  const requestedStart = parseDateTimeUtc(
+    campaign.budget?.startDate,
+    scheduleMode === "custom" ? campaign.schedule?.startTime : "00:00",
+  );
+
+  if (!requestedStart) {
+    throw createPublishError("Campaign start date is required before publishing.", "META_DATE_REQUIRED");
+  }
+
+  const minimumStart = new Date(now.getTime() + MIN_START_BUFFER_MS);
+  const start = requestedStart.getTime() > minimumStart.getTime() ? requestedStart : minimumStart;
+  const end = new Date(start.getTime() + durationDays * DAY_MS);
+
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end.getTime() <= start.getTime() || end.getTime() <= now.getTime()) {
+    throw createPublishError("Campaign end date must be later than the start date and in the future.", "META_DATE_INVALID");
+  }
+
+  return {
+    startTime: metaTimestamp(start),
+    endTime: metaTimestamp(end),
+  };
 }
 
 function normalizeUrl(value = "") {
@@ -168,7 +203,7 @@ async function createCampaign({ accessToken, adAccountId, campaign }) {
   });
 }
 
-async function createAdSet({ adAccountId, accessToken, campaign, metaCampaignId, adAccount, geoLocations }) {
+async function createAdSet({ adAccountId, accessToken, campaign, metaCampaignId, adAccount, geoLocations, schedule }) {
   const targeting = buildTargeting({ campaign, geoLocations });
 
   return graphPost(`/${adAccountPath(adAccountId)}/adsets`, accessToken, {
@@ -180,8 +215,8 @@ async function createAdSet({ adAccountId, accessToken, campaign, metaCampaignId,
     ...(campaign.objective === "reach" ? {} : { destination_type: "WEBSITE" }),
     bid_strategy: "LOWEST_COST_WITHOUT_CAP",
     targeting,
-    start_time: metaDateTime(campaign.budget?.startDate),
-    end_time: metaDateTime(campaign.budget?.endDate, true),
+    start_time: schedule.startTime,
+    end_time: schedule.endTime,
     status: SAFE_STATUS,
   });
 }
@@ -260,6 +295,7 @@ export async function publishMetaAdCampaign({ accessToken, connection, campaign 
   }
 
   const geoLocations = await resolveGeoLocations(accessToken, campaign);
+  const schedule = buildMetaSchedule(campaign);
 
   const metaCampaign = await runPublishStep(result, "campaign", () =>
     createCampaign({ accessToken, adAccountId: selectedAdAccount.id, campaign }),
@@ -267,7 +303,7 @@ export async function publishMetaAdCampaign({ accessToken, connection, campaign 
   result.ids.metaCampaignId = metaCampaign.id;
 
   const metaAdSet = await runPublishStep(result, "adSet", () =>
-    createAdSet({ accessToken, adAccountId: selectedAdAccount.id, campaign, metaCampaignId: metaCampaign.id, adAccount: selectedAdAccount, geoLocations }),
+    createAdSet({ accessToken, adAccountId: selectedAdAccount.id, campaign, metaCampaignId: metaCampaign.id, adAccount: selectedAdAccount, geoLocations, schedule }),
   );
   result.ids.metaAdSetId = metaAdSet.id;
 
