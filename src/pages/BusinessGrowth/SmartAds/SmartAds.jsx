@@ -189,7 +189,10 @@ function createEmptyForm() {
     videoMimeType: "",
     videoSize: 0,
     videoDuration: 0,
+    videoWidth: 0,
+    videoHeight: 0,
     videoNeedsReselect: false,
+    existingVideoId: "",
     templateId: "",
     sessionDesignId: "",
     gender: "All",
@@ -227,7 +230,10 @@ function formFromCampaign(campaign) {
     videoMimeType: campaign.creative?.videoMimeType || "",
     videoSize: campaign.creative?.videoSize || 0,
     videoDuration: campaign.creative?.videoDuration || 0,
+    videoWidth: campaign.creative?.videoWidth || 0,
+    videoHeight: campaign.creative?.videoHeight || 0,
     videoNeedsReselect: campaign.creative?.mediaType === "video",
+    existingVideoId: campaign.meta?.videoId || campaign.creative?.existingVideoId || "",
     templateId: campaign.creative?.templateId || "",
     sessionDesignId: campaign.creative?.sessionDesignId || "",
     gender: campaign.audience?.gender || "All",
@@ -267,7 +273,10 @@ function campaignFromForm(form, status, inventoryItems, templateOptions, session
       videoMimeType: form.mediaType === "video" ? form.videoMimeType : "",
       videoSize: form.mediaType === "video" ? Number(form.videoSize) || 0 : 0,
       videoDuration: form.mediaType === "video" ? Number(form.videoDuration) || 0 : 0,
+      videoWidth: form.mediaType === "video" ? Number(form.videoWidth) || 0 : 0,
+      videoHeight: form.mediaType === "video" ? Number(form.videoHeight) || 0 : 0,
       videoNeedsReselect: form.mediaType === "video" && !form.videoDataUrl,
+      existingVideoId: form.mediaType === "video" ? form.existingVideoId || "" : "",
       templateId: form.mediaType === "image" && form.creativeSource === "marketing-studio" && selectedTemplate ? selectedTemplate.id : null,
       sessionDesignId: form.mediaType === "image" && form.creativeSource === "marketing-studio" && selectedSessionDesign ? selectedSessionDesign.id : null,
       itemId: form.goal === "product" || (form.mediaType === "image" && form.creativeSource === "item-image") ? selectedItem?.id || null : null,
@@ -366,14 +375,26 @@ function isSupportedVideoFile(file) {
   return supportedVideoTypes.includes(file?.type) || supportedVideoExtensions.some((extension) => name.endsWith(extension));
 }
 
-function getVideoDuration(file) {
+function inferVideoMimeType(file) {
+  if (file?.type) return file.type;
+  const name = String(file?.name || "").toLowerCase();
+  if (name.endsWith(".mov")) return "video/quicktime";
+  if (name.endsWith(".m4v")) return "video/x-m4v";
+  return "video/mp4";
+}
+
+function getVideoMetadata(file) {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(file);
     const video = document.createElement("video");
     video.preload = "metadata";
     video.onloadedmetadata = () => {
       URL.revokeObjectURL(url);
-      resolve(Number.isFinite(video.duration) ? video.duration : 0);
+      resolve({
+        duration: Number.isFinite(video.duration) ? video.duration : 0,
+        width: Number(video.videoWidth) || 0,
+        height: Number(video.videoHeight) || 0,
+      });
     };
     video.onerror = () => {
       URL.revokeObjectURL(url);
@@ -385,26 +406,31 @@ function getVideoDuration(file) {
 
 async function readValidatedVideoFile(file) {
   if (!file) return null;
-  if (!file.type.startsWith("video/")) throw new Error("Choose a video file.");
+  const hasVideoMimeOrExtension = file.type ? file.type.startsWith("video/") : supportedVideoExtensions.some((extension) => String(file.name || "").toLowerCase().endsWith(extension));
+  if (!hasVideoMimeOrExtension) throw new Error("Choose a video file.");
   if (!isSupportedVideoFile(file)) throw new Error("Use an MP4 or MOV video for Meta publishing.");
   if (file.size > maxVideoBytes) throw new Error("Video must be 20 MB or smaller for this upload flow.");
 
-  let duration;
+  let metadata;
   try {
-    duration = await getVideoDuration(file);
+    metadata = await getVideoMetadata(file);
   } catch {
-    duration = 0;
+    metadata = { duration: 0, width: 0, height: 0 };
   }
+  const duration = metadata.duration;
   if (duration > maxVideoDurationSeconds) throw new Error("Video must be 10 minutes or shorter for this Smart Ads flow.");
 
   return {
     dataUrl: await readBlobAsDataUrl(file),
     duration,
+    width: metadata.width,
+    height: metadata.height,
   };
 }
 
 function resolvePublishableVideoDataUrl(form) {
   if (form.mediaType !== "video") return "";
+  if (!form.videoDataUrl && form.existingVideoId) return "";
   if (!form.videoDataUrl) throw new Error("Re-select the video before publishing. Browser video files are not stored in drafts.");
   if (!String(form.videoDataUrl).startsWith("data:video/")) throw new Error("A publishable MP4 or MOV video file is required.");
   return form.videoDataUrl;
@@ -651,9 +677,9 @@ function AdPreview({ form, creativeImage, creativeVideo, selectedItem, captionTo
             <p className="text-xs font-semibold text-slate-500">Sponsored preview</p>
           </div>
         </div>
-        <div className="grid aspect-[4/3] place-items-center overflow-hidden rounded-xl border border-slate-200 bg-slate-100 p-3">
+        <div className={isVideo ? "flex min-h-52 w-full items-center justify-center rounded-xl border border-slate-200 bg-black p-2 sm:min-h-60" : "grid aspect-[4/3] place-items-center overflow-hidden rounded-xl border border-slate-200 bg-slate-100 p-3"}>
           {isVideo && creativeVideo ? (
-            <video src={creativeVideo} controls className="max-h-full max-w-full rounded-lg object-contain" />
+            <video src={creativeVideo} controls className="block h-auto max-h-[360px] w-auto max-w-full rounded-lg object-contain object-center sm:max-h-[420px] lg:max-h-[460px]" />
           ) : creativeImage ? (
             <img src={creativeImage} alt="" className="max-h-full max-w-full object-contain" />
           ) : (
@@ -861,10 +887,13 @@ function SmartAds() {
         creativeSource: "upload",
         videoDataUrl: video.dataUrl,
         videoName: file.name,
-        videoMimeType: file.type || "video/mp4",
+        videoMimeType: inferVideoMimeType(file),
         videoSize: file.size,
         videoDuration: Math.round(video.duration),
+        videoWidth: video.width,
+        videoHeight: video.height,
         videoNeedsReselect: false,
+        existingVideoId: "",
         templateId: "",
         sessionDesignId: "",
       }));
@@ -910,7 +939,7 @@ function SmartAds() {
 
     if (stepIndex === 1) {
       if (form.mediaType === "video") {
-        if (!form.videoDataUrl) return form.videoName ? "Re-select the video before publishing. Browser video files are not stored in drafts." : "Upload an MP4 or MOV video.";
+        if (!form.videoDataUrl && !form.existingVideoId) return form.videoName ? "Re-select the video before publishing. Browser video files are not stored in drafts." : "Upload an MP4 or MOV video.";
         return "";
       }
       if (form.creativeSource === "upload" && !form.uploadDataUrl) return "Upload a creative image.";
@@ -1018,6 +1047,8 @@ function SmartAds() {
                 videoMimeType: form.videoMimeType,
                 videoSize: form.videoSize,
                 videoDuration: form.videoDuration,
+                videoWidth: form.videoWidth,
+                videoHeight: form.videoHeight,
               }
             : {}),
         },
@@ -1368,7 +1399,12 @@ function SmartAds() {
                   <p>
                     {form.videoDuration ? `${Math.round(form.videoDuration)} sec` : "Duration not saved"} {form.videoSize ? `- ${(form.videoSize / (1024 * 1024)).toFixed(1)} MB` : ""}
                   </p>
-                  {form.videoNeedsReselect && <p className="mt-2 text-amber-600">Re-select this video before publishing.</p>}
+                  {form.videoWidth && form.videoHeight ? <p>{form.videoWidth} × {form.videoHeight}</p> : null}
+                  {form.videoNeedsReselect && (
+                    <p className="mt-2 text-amber-600">
+                      {form.existingVideoId ? "Saved Meta video can be reused for retry. Re-select only if you want to replace it." : "Re-select this video before publishing."}
+                    </p>
+                  )}
                 </div>
               )}
             </div>

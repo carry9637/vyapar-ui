@@ -17,6 +17,7 @@ Smart Ads Dashboard -> Connect Meta -> Meta OAuth -> Fetch Business/Page/Instagr
 - Creative supports Image and Video types inside the existing Step 02 flow.
 - Image supports Upload Creative, Marketing Studio templates/session designs, and existing Item Image selection.
 - Video currently supports Upload Video only, with MP4/MOV selection, file-size validation, metadata display, and HTML video preview.
+- Video preview uses a centered contain frame with a neutral black background so portrait/landscape videos are not cropped or stretched.
 - Video drafts store file metadata only; users must re-select the raw video file before publishing after refresh/reopen.
 - Selected item image/name/category/price/unit stay synchronized from the shared inventory item source.
 - Audience prototype supports location, Pan India, gender, age, interests, and validation.
@@ -39,8 +40,9 @@ Smart Ads Dashboard -> Connect Meta -> Meta OAuth -> Fetch Business/Page/Instagr
 - Image upload uses the real Meta Ad Images endpoint and returns a real image hash.
 - Video upload uses the real Meta Ad Videos endpoint and returns a real Meta video ID.
 - Video processing is checked before creative creation; if Meta is still processing, the partial publish record keeps the real video ID and fails clearly.
-- Preferred Meta video thumbnail is used when available; otherwise the creative relies on Meta default thumbnail behavior.
-- Image creatives use `link_data.image_hash`; video creatives use `video_data.video_id`.
+- Meta video creative requires a thumbnail reference, so the backend fetches the uploaded video's real `picture`/thumbnail URL and sends it as `video_data.image_url`.
+- Image creatives use `link_data.image_hash`; video creatives use `video_data.video_id` plus `video_data.image_url`.
+- Retry after a partial video publish can reuse the stored real Meta video ID instead of uploading the same video again.
 - Creative is created with Page identity, optional Instagram actor, destination URL, text, and CTA.
 - Final Ad is created in `PAUSED` state; no fake IDs or demo success fallback are used.
 - Failed Meta steps return safe error details including step, code, subcode, user message, and fbtrace ID where provided.

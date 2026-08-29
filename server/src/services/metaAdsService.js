@@ -127,6 +127,30 @@ function safeFileName(value = "") {
   return name || "smart-ads-video.mp4";
 }
 
+function cleanMetaId(value = "") {
+  const id = String(value || "").trim();
+  return /^[a-zA-Z0-9_]+$/.test(id) ? id : "";
+}
+
+function validHttpUrl(value = "") {
+  try {
+    const parsed = new URL(String(value || ""));
+    return ["http:", "https:"].includes(parsed.protocol) ? parsed.toString() : "";
+  } catch {
+    return "";
+  }
+}
+
+function inferVideoMimeType(creative = {}, dataMimeType = "") {
+  const explicitType = String(creative.videoMimeType || dataMimeType || "").toLowerCase();
+  if (explicitType) return explicitType;
+  const name = String(creative.videoName || "").toLowerCase();
+  if (name.endsWith(".mov")) return "video/quicktime";
+  if (name.endsWith(".m4v")) return "video/x-m4v";
+  if (name.endsWith(".mp4")) return "video/mp4";
+  return "";
+}
+
 async function graphPostMultipart(path, accessToken, params = {}, files = []) {
   const config = getMetaOAuthConfig();
   const url = new URL(path.startsWith("http") ? path : `${config.graphBaseUrl}${path}`);
@@ -221,12 +245,12 @@ function imageFromDataUrl(dataUrl = "") {
 
 function videoFromDataUrl(creative = {}) {
   const dataUrl = String(creative.videoDataUrl || "");
-  const match = dataUrl.match(/^data:(video\/(?:mp4|quicktime|x-m4v));base64,(.+)$/i);
+  const match = dataUrl.match(/^data:([^;,]*);base64,(.+)$/i);
   if (!match) {
     throw createPublishError("A publishable MP4 or MOV video file is required.", "META_CREATIVE_VIDEO_REQUIRED");
   }
 
-  const mimeType = match[1].toLowerCase();
+  const mimeType = inferVideoMimeType(creative, match[1]);
   if (!SUPPORTED_VIDEO_TYPES.has(mimeType)) {
     throw createPublishError("Use an MP4 or MOV video for Meta publishing.", "META_CREATIVE_VIDEO_TYPE");
   }
@@ -310,12 +334,26 @@ async function waitForVideoReady(accessToken, videoId) {
 }
 
 async function getVideoThumbnailUrl(accessToken, videoId) {
+  const videoPayload = await graphGet(`/${videoId}`, accessToken, {
+    fields: "picture",
+  });
+  const pictureUrl = validHttpUrl(videoPayload.picture);
+  if (pictureUrl) return pictureUrl;
+
   const payload = await graphGet(`/${videoId}/thumbnails`, accessToken, {
     fields: "uri,is_preferred",
     limit: 10,
   });
   const thumbnails = Array.isArray(payload.data) ? payload.data : [];
-  return thumbnails.find((thumbnail) => thumbnail.is_preferred)?.uri || thumbnails[0]?.uri || "";
+  return validHttpUrl(thumbnails.find((thumbnail) => thumbnail.is_preferred)?.uri) || validHttpUrl(thumbnails[0]?.uri);
+}
+
+async function getRequiredVideoThumbnailUrl(accessToken, videoId) {
+  const thumbnailUrl = await getVideoThumbnailUrl(accessToken, videoId);
+  if (!thumbnailUrl) {
+    throw createPublishError("Meta did not return a usable thumbnail for the uploaded video, so the video creative cannot be created yet.", "META_VIDEO_THUMBNAIL_REQUIRED");
+  }
+  return thumbnailUrl;
 }
 
 function buildTargeting({ campaign, geoLocations }) {
@@ -382,6 +420,10 @@ async function createImageAdCreative({ accessToken, adAccountId, campaign, pageI
 }
 
 async function createVideoAdCreative({ accessToken, adAccountId, campaign, pageId, instagramAccountId, videoId, thumbnailUrl, link }) {
+  if (!thumbnailUrl) {
+    throw createPublishError("Meta video creative requires a thumbnail image_url or image_hash.", "META_VIDEO_THUMBNAIL_REQUIRED");
+  }
+
   const objectStorySpec = {
     page_id: pageId,
     ...(instagramAccountId ? { instagram_actor_id: instagramAccountId } : {}),
@@ -433,6 +475,7 @@ export async function publishMetaAdCampaign({ accessToken, connection, campaign 
   const selectedPage = (assets.pages || []).find((page) => page.id === selection.pageId);
   const destinationUrl = normalizeUrl(campaign.ad?.website);
   const mediaType = campaign.creative?.mediaType === "video" ? "video" : "image";
+  const existingVideoId = mediaType === "video" ? cleanMetaId(campaign.creative?.existingVideoId || campaign.meta?.videoId) : "";
   let videoFile = null;
   const result = {
     status: "failed",
@@ -453,7 +496,7 @@ export async function publishMetaAdCampaign({ accessToken, connection, campaign 
   if (!selectedPage?.id) throw createPublishError("Select a real Facebook Page before publishing.", "META_PAGE_REQUIRED");
   if (!selectedAdAccount?.id) throw createPublishError("Select a real Meta Ad Account before publishing.", "META_AD_ACCOUNT_REQUIRED");
   if (!destinationUrl) throw createPublishError("Enter a real public HTTP/HTTPS website URL before publishing. WhatsApp destination publishing is not enabled yet.", "META_DESTINATION_REQUIRED");
-  if (mediaType === "video") videoFile = videoFromDataUrl(campaign.creative);
+  if (mediaType === "video" && !existingVideoId) videoFile = videoFromDataUrl(campaign.creative);
   if (campaign.audience?.interests?.length) {
     result.warnings.push("Custom interest names were not sent to Meta because targeting IDs are required.");
   }
@@ -474,19 +517,18 @@ export async function publishMetaAdCampaign({ accessToken, connection, campaign 
   let metaCreative;
 
   if (mediaType === "video") {
-    const metaVideo = await runPublishStep(result, "video_upload", async () => {
-      const id = await uploadAdVideo(accessToken, selectedAdAccount.id, videoFile);
-      return { id };
-    });
+    const metaVideo = existingVideoId
+      ? await runPublishStep(result, "video_reuse", async () => ({ id: existingVideoId }))
+      : await runPublishStep(result, "video_upload", async () => {
+          const id = await uploadAdVideo(accessToken, selectedAdAccount.id, videoFile);
+          return { id };
+        });
     result.ids.metaVideoId = metaVideo.id;
 
     await runPublishStep(result, "video_processing", () => waitForVideoReady(accessToken, metaVideo.id));
-    let thumbnailUrl = "";
-    try {
-      thumbnailUrl = await getVideoThumbnailUrl(accessToken, metaVideo.id);
-    } catch {
-      result.warnings.push("Meta video thumbnail was not available; creative will use Meta default thumbnail behavior.");
-    }
+    const thumbnail = await runPublishStep(result, "video_thumbnail", async () => ({
+      imageUrl: await getRequiredVideoThumbnailUrl(accessToken, metaVideo.id),
+    }));
 
     metaCreative = await runPublishStep(result, "creative", () =>
       createVideoAdCreative({
@@ -496,7 +538,7 @@ export async function publishMetaAdCampaign({ accessToken, connection, campaign 
         pageId: selectedPage.id,
         instagramAccountId: selection.instagramAccountId,
         videoId: metaVideo.id,
-        thumbnailUrl,
+        thumbnailUrl: thumbnail.imageUrl,
         link: destinationUrl,
       }),
     );
