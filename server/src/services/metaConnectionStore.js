@@ -20,6 +20,25 @@ let metaConnection = {
   lastError: "",
 };
 
+function emptyAssets() {
+  return {
+    businesses: [],
+    pages: [],
+    instagramAccounts: [],
+    adAccounts: [],
+    warnings: [],
+  };
+}
+
+function emptySelection() {
+  return {
+    businessId: "",
+    pageId: "",
+    instagramAccountId: "",
+    adAccountId: "",
+  };
+}
+
 function publicConnection() {
   return {
     connected: metaConnection.connected,
@@ -55,6 +74,12 @@ export function setMetaConnectionError(message) {
   metaConnection = {
     ...metaConnection,
     connected: false,
+    user: null,
+    permissions: [],
+    token: null,
+    assets: emptyAssets(),
+    selection: emptySelection(),
+    connectedAt: null,
     lastError: message || "Meta connection failed",
   };
   return publicConnection();
@@ -85,7 +110,10 @@ export function markMetaReconnectRequired(message) {
   metaConnection = {
     ...metaConnection,
     connected: false,
+    user: null,
+    permissions: [],
     token: null,
+    connectedAt: null,
     lastError: message || "Meta token expired. Reconnect Meta to continue.",
   };
   return publicConnection();
@@ -110,19 +138,8 @@ export function disconnectMetaConnection() {
     user: null,
     permissions: [],
     token: null,
-    assets: {
-      businesses: [],
-      pages: [],
-      instagramAccounts: [],
-      adAccounts: [],
-      warnings: [],
-    },
-    selection: {
-      businessId: "",
-      pageId: "",
-      instagramAccountId: "",
-      adAccountId: "",
-    },
+    assets: emptyAssets(),
+    selection: emptySelection(),
     connectedAt: null,
     lastError: "",
   };

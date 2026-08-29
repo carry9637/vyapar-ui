@@ -1,24 +1,75 @@
 import crypto from "node:crypto";
+import { Buffer } from "node:buffer";
 import { getMetaOAuthConfig, META_AUTH_SCOPES } from "../config/metaOAuth.js";
 
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
+export const META_OAUTH_STATE_COOKIE = "vyapar_meta_oauth_state";
 const oauthStates = new Map();
+const usedStateDigests = new Map();
 
 function cleanupExpiredStates() {
   const now = Date.now();
   for (const [state, value] of oauthStates.entries()) {
     if (value.expiresAt <= now) oauthStates.delete(state);
   }
+  for (const [digest, value] of usedStateDigests.entries()) {
+    if (value.expiresAt <= now) usedStateDigests.delete(digest);
+  }
+}
+
+function safeReturnTo(returnTo = "/business-growth/smart-ads") {
+  const value = String(returnTo || "").trim();
+  return value.startsWith("/") && !value.startsWith("//") ? value : "/business-growth/smart-ads";
+}
+
+function stateDigest(state) {
+  return crypto.createHash("sha256").update(String(state || "")).digest("hex");
+}
+
+function signStatePayload(encodedPayload) {
+  const config = getMetaOAuthConfig();
+  return crypto.createHmac("sha256", config.appSecret).update(encodedPayload).digest("base64url");
+}
+
+function encodeStateCookie(payload) {
+  const encodedPayload = Buffer.from(JSON.stringify(payload)).toString("base64url");
+  return `${encodedPayload}.${signStatePayload(encodedPayload)}`;
+}
+
+function decodeStateCookie(cookieValue = "") {
+  const [encodedPayload, signature] = String(cookieValue || "").split(".");
+  if (!encodedPayload || !signature) return null;
+  const expectedSignature = signStatePayload(encodedPayload);
+  const expected = Buffer.from(expectedSignature);
+  const received = Buffer.from(signature);
+  if (expected.length !== received.length || !crypto.timingSafeEqual(expected, received)) return null;
+
+  try {
+    return JSON.parse(Buffer.from(encodedPayload, "base64url").toString("utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function markStateUsed(state, expiresAt) {
+  usedStateDigests.set(stateDigest(state), { expiresAt: expiresAt || Date.now() + OAUTH_STATE_TTL_MS });
 }
 
 function createState(returnTo = "/business-growth/smart-ads") {
   cleanupExpiredStates();
   const state = crypto.randomBytes(24).toString("hex");
+  const expiresAt = Date.now() + OAUTH_STATE_TTL_MS;
+  const sanitizedReturnTo = safeReturnTo(returnTo);
   oauthStates.set(state, {
-    returnTo,
-    expiresAt: Date.now() + OAUTH_STATE_TTL_MS,
+    returnTo: sanitizedReturnTo,
+    expiresAt,
   });
-  return state;
+  return {
+    state,
+    returnTo: sanitizedReturnTo,
+    expiresAt,
+    cookieValue: encodeStateCookie({ state, returnTo: sanitizedReturnTo, expiresAt }),
+  };
 }
 
 export function normalizeMetaError(error, fallback = "Meta request failed") {
@@ -37,6 +88,10 @@ export function normalizeMetaError(error, fallback = "Meta request failed") {
 }
 
 export function buildMetaAuthorizationUrl(returnTo) {
+  return buildMetaAuthorizationRequest(returnTo).authorizationUrl;
+}
+
+export function buildMetaAuthorizationRequest(returnTo) {
   const config = getMetaOAuthConfig();
   if (!config.configured) {
     const error = new Error("Meta environment configuration is missing.");
@@ -44,11 +99,11 @@ export function buildMetaAuthorizationUrl(returnTo) {
     throw error;
   }
 
-  const state = createState(returnTo);
+  const stateRecord = createState(returnTo);
   const params = new URLSearchParams({
     client_id: config.appId,
     redirect_uri: config.redirectUri,
-    state,
+    state: stateRecord.state,
     response_type: "code",
     scope: META_AUTH_SCOPES.join(","),
   });
@@ -57,15 +112,34 @@ export function buildMetaAuthorizationUrl(returnTo) {
     params.set("config_id", config.loginConfigId);
   }
 
-  return `${config.authBaseUrl}?${params.toString()}`;
+  return {
+    authorizationUrl: `${config.authBaseUrl}?${params.toString()}`,
+    stateCookie: stateRecord.cookieValue,
+    maxAgeMs: OAUTH_STATE_TTL_MS,
+  };
 }
 
-export function validateMetaOAuthState(state) {
+export function validateMetaOAuthState(state, cookieValue = "") {
   cleanupExpiredStates();
-  const savedState = oauthStates.get(state);
-  if (!savedState) return null;
-  oauthStates.delete(state);
-  return savedState;
+  const stateValue = String(state || "");
+  const savedState = oauthStates.get(stateValue);
+  if (savedState) {
+    oauthStates.delete(stateValue);
+    markStateUsed(stateValue, savedState.expiresAt);
+    return savedState;
+  }
+
+  const decodedCookie = decodeStateCookie(cookieValue);
+  if (!decodedCookie || decodedCookie.state !== stateValue || decodedCookie.expiresAt <= Date.now()) return null;
+
+  const digest = stateDigest(stateValue);
+  if (usedStateDigests.has(digest)) return null;
+  markStateUsed(stateValue, decodedCookie.expiresAt);
+
+  return {
+    returnTo: safeReturnTo(decodedCookie.returnTo),
+    expiresAt: decodedCookie.expiresAt,
+  };
 }
 
 async function readMetaResponse(response, fallback) {

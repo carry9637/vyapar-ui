@@ -1,9 +1,14 @@
 import { Buffer } from "node:buffer";
+import { getMetaOAuthConfig } from "../config/metaOAuth.js";
 import { graphGet, graphPost, normalizeMetaError } from "./metaOAuthService.js";
 
 const SAFE_STATUS = "PAUSED";
 const MIN_START_BUFFER_MS = 10 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const MAX_VIDEO_BYTES = 20 * 1024 * 1024;
+const SUPPORTED_VIDEO_TYPES = new Set(["video/mp4", "video/quicktime", "video/x-m4v"]);
+const VIDEO_PROCESSING_ATTEMPTS = 6;
+const VIDEO_PROCESSING_DELAY_MS = 3000;
 const ZERO_DECIMAL_CURRENCIES = new Set(["BIF", "CLP", "DJF", "GNF", "JPY", "KMF", "KRW", "MGA", "PYG", "RWF", "UGX", "VND", "VUV", "XAF", "XOF", "XPF"]);
 
 function createPublishError(message, code = "META_PUBLISH_ERROR", publishResult = null) {
@@ -111,6 +116,52 @@ function metaCtaType(cta = "") {
   return "CONTACT_US";
 }
 
+function delay(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function safeFileName(value = "") {
+  const name = String(value || "smart-ads-video.mp4").replace(/[^a-z0-9._-]/gi, "_");
+  return name || "smart-ads-video.mp4";
+}
+
+async function graphPostMultipart(path, accessToken, params = {}, files = []) {
+  const config = getMetaOAuthConfig();
+  const url = new URL(path.startsWith("http") ? path : `${config.graphBaseUrl}${path}`);
+  const body = new FormData();
+
+  Object.entries(params).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === "") return;
+    body.set(key, typeof value === "object" ? JSON.stringify(value) : String(value));
+  });
+  body.set("access_token", accessToken);
+
+  files.forEach((file) => {
+    body.set(file.fieldName, new Blob([file.buffer], { type: file.contentType }), file.filename);
+  });
+
+  const response = await fetch(url, {
+    method: "POST",
+    body,
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || payload.error) {
+    const normalized = normalizeMetaError({ ...payload, httpStatus: response.status }, "Meta Graph API request failed");
+    const error = new Error(normalized.message);
+    error.code = normalized.code;
+    error.subcode = normalized.subcode;
+    error.type = normalized.type;
+    error.userTitle = normalized.userTitle;
+    error.userMessage = normalized.userMessage;
+    error.fbtraceId = normalized.fbtraceId;
+    error.httpStatus = normalized.httpStatus;
+    throw error;
+  }
+  return payload;
+}
+
 function genderTargeting(gender = "All") {
   if (gender === "Male") return [1];
   if (gender === "Female") return [2];
@@ -168,6 +219,29 @@ function imageFromDataUrl(dataUrl = "") {
   };
 }
 
+function videoFromDataUrl(creative = {}) {
+  const dataUrl = String(creative.videoDataUrl || "");
+  const match = dataUrl.match(/^data:(video\/(?:mp4|quicktime|x-m4v));base64,(.+)$/i);
+  if (!match) {
+    throw createPublishError("A publishable MP4 or MOV video file is required.", "META_CREATIVE_VIDEO_REQUIRED");
+  }
+
+  const mimeType = match[1].toLowerCase();
+  if (!SUPPORTED_VIDEO_TYPES.has(mimeType)) {
+    throw createPublishError("Use an MP4 or MOV video for Meta publishing.", "META_CREATIVE_VIDEO_TYPE");
+  }
+
+  const buffer = Buffer.from(match[2], "base64");
+  if (!buffer.length) throw createPublishError("The selected video file is empty.", "META_CREATIVE_VIDEO_EMPTY");
+  if (buffer.length > MAX_VIDEO_BYTES) throw createPublishError("Video must be 20 MB or smaller for this upload flow.", "META_CREATIVE_VIDEO_TOO_LARGE");
+
+  return {
+    buffer,
+    mimeType,
+    filename: safeFileName(creative.videoName || (mimeType === "video/quicktime" ? "smart-ads-video.mov" : "smart-ads-video.mp4")),
+  };
+}
+
 async function uploadAdImage(accessToken, adAccountId, creative = {}) {
   const accountPath = adAccountPath(adAccountId);
   const { buffer } = imageFromDataUrl(creative.imageDataUrl);
@@ -178,6 +252,70 @@ async function uploadAdImage(accessToken, adAccountId, creative = {}) {
   const imageRecord = Object.values(payload.images || {})[0];
   if (!imageRecord?.hash) throw createPublishError("Meta image upload succeeded but did not return an image hash.", "META_IMAGE_HASH_MISSING");
   return imageRecord.hash;
+}
+
+async function uploadAdVideo(accessToken, adAccountId, videoFile) {
+  const accountPath = adAccountPath(adAccountId);
+  const payload = await graphPostMultipart(
+    `/${accountPath}/advideos`,
+    accessToken,
+    {
+      title: videoFile.filename,
+    },
+    [
+      {
+        fieldName: "source",
+        buffer: videoFile.buffer,
+        filename: videoFile.filename,
+        contentType: videoFile.mimeType,
+      },
+    ],
+  );
+
+  if (!payload.id) throw createPublishError("Meta video upload succeeded but did not return a video ID.", "META_VIDEO_ID_MISSING");
+  return payload.id;
+}
+
+function videoStatusValue(statusPayload = {}) {
+  const status = statusPayload.status || {};
+  return [
+    status.video_status,
+    status.processing_phase?.status,
+    status.uploading_phase?.status,
+    status.publishing_phase?.status,
+  ]
+    .filter(Boolean)
+    .map((value) => String(value).toLowerCase());
+}
+
+function isVideoReady(statusPayload = {}) {
+  const values = videoStatusValue(statusPayload);
+  return values.includes("ready") || values.includes("complete") || Number(statusPayload.status?.processing_progress) >= 100;
+}
+
+function isVideoFailed(statusPayload = {}) {
+  const values = videoStatusValue(statusPayload);
+  return values.includes("error") || values.includes("failed") || Boolean(statusPayload.status?.error);
+}
+
+async function waitForVideoReady(accessToken, videoId) {
+  for (let attempt = 0; attempt < VIDEO_PROCESSING_ATTEMPTS; attempt += 1) {
+    const statusPayload = await graphGet(`/${videoId}`, accessToken, { fields: "status" });
+    if (isVideoReady(statusPayload)) return statusPayload;
+    if (isVideoFailed(statusPayload)) throw createPublishError("Meta video processing failed. Use another MP4 or MOV video and try again.", "META_VIDEO_PROCESSING_FAILED");
+    if (attempt < VIDEO_PROCESSING_ATTEMPTS - 1) await delay(VIDEO_PROCESSING_DELAY_MS);
+  }
+
+  throw createPublishError("Meta video is still processing. The partial publish record includes the video ID; wait a moment before trying again.", "META_VIDEO_PROCESSING");
+}
+
+async function getVideoThumbnailUrl(accessToken, videoId) {
+  const payload = await graphGet(`/${videoId}/thumbnails`, accessToken, {
+    fields: "uri,is_preferred",
+    limit: 10,
+  });
+  const thumbnails = Array.isArray(payload.data) ? payload.data : [];
+  return thumbnails.find((thumbnail) => thumbnail.is_preferred)?.uri || thumbnails[0]?.uri || "";
 }
 
 function buildTargeting({ campaign, geoLocations }) {
@@ -221,7 +359,7 @@ async function createAdSet({ adAccountId, accessToken, campaign, metaCampaignId,
   });
 }
 
-async function createAdCreative({ accessToken, adAccountId, campaign, pageId, instagramAccountId, imageHash, link }) {
+async function createImageAdCreative({ accessToken, adAccountId, campaign, pageId, instagramAccountId, imageHash, link }) {
   const objectStorySpec = {
     page_id: pageId,
     ...(instagramAccountId ? { instagram_actor_id: instagramAccountId } : {}),
@@ -239,6 +377,28 @@ async function createAdCreative({ accessToken, adAccountId, campaign, pageId, in
 
   return graphPost(`/${adAccountPath(adAccountId)}/adcreatives`, accessToken, {
     name: `${campaign.name} Creative`,
+    object_story_spec: objectStorySpec,
+  });
+}
+
+async function createVideoAdCreative({ accessToken, adAccountId, campaign, pageId, instagramAccountId, videoId, thumbnailUrl, link }) {
+  const objectStorySpec = {
+    page_id: pageId,
+    ...(instagramAccountId ? { instagram_actor_id: instagramAccountId } : {}),
+    video_data: {
+      video_id: videoId,
+      ...(thumbnailUrl ? { image_url: thumbnailUrl } : {}),
+      title: campaign.ad?.headline || campaign.name,
+      message: campaign.ad?.caption || campaign.ad?.headline || campaign.name,
+      call_to_action: {
+        type: metaCtaType(campaign.ad?.cta),
+        value: { link },
+      },
+    },
+  };
+
+  return graphPost(`/${adAccountPath(adAccountId)}/adcreatives`, accessToken, {
+    name: `${campaign.name} Video Creative`,
     object_story_spec: objectStorySpec,
   });
 }
@@ -272,6 +432,8 @@ export async function publishMetaAdCampaign({ accessToken, connection, campaign 
   const selectedAdAccount = (assets.adAccounts || []).find((account) => account.id === selection.adAccountId);
   const selectedPage = (assets.pages || []).find((page) => page.id === selection.pageId);
   const destinationUrl = normalizeUrl(campaign.ad?.website);
+  const mediaType = campaign.creative?.mediaType === "video" ? "video" : "image";
+  let videoFile = null;
   const result = {
     status: "failed",
     safeStatus: SAFE_STATUS,
@@ -279,6 +441,7 @@ export async function publishMetaAdCampaign({ accessToken, connection, campaign 
       metaCampaignId: null,
       metaAdSetId: null,
       metaImageHash: null,
+      metaVideoId: null,
       metaCreativeId: null,
       metaAdId: null,
     },
@@ -290,6 +453,7 @@ export async function publishMetaAdCampaign({ accessToken, connection, campaign 
   if (!selectedPage?.id) throw createPublishError("Select a real Facebook Page before publishing.", "META_PAGE_REQUIRED");
   if (!selectedAdAccount?.id) throw createPublishError("Select a real Meta Ad Account before publishing.", "META_AD_ACCOUNT_REQUIRED");
   if (!destinationUrl) throw createPublishError("Enter a real public HTTP/HTTPS website URL before publishing. WhatsApp destination publishing is not enabled yet.", "META_DESTINATION_REQUIRED");
+  if (mediaType === "video") videoFile = videoFromDataUrl(campaign.creative);
   if (campaign.audience?.interests?.length) {
     result.warnings.push("Custom interest names were not sent to Meta because targeting IDs are required.");
   }
@@ -307,23 +471,54 @@ export async function publishMetaAdCampaign({ accessToken, connection, campaign 
   );
   result.ids.metaAdSetId = metaAdSet.id;
 
-  const imageHash = await runPublishStep(result, "imageUpload", async () => {
-    const hash = await uploadAdImage(accessToken, selectedAdAccount.id, campaign.creative);
-    return { hash };
-  });
-  result.ids.metaImageHash = imageHash.hash;
+  let metaCreative;
 
-  const metaCreative = await runPublishStep(result, "creative", () =>
-    createAdCreative({
-      accessToken,
-      adAccountId: selectedAdAccount.id,
-      campaign,
-      pageId: selectedPage.id,
-      instagramAccountId: selection.instagramAccountId,
-      imageHash: imageHash.hash,
-      link: destinationUrl,
-    }),
-  );
+  if (mediaType === "video") {
+    const metaVideo = await runPublishStep(result, "video_upload", async () => {
+      const id = await uploadAdVideo(accessToken, selectedAdAccount.id, videoFile);
+      return { id };
+    });
+    result.ids.metaVideoId = metaVideo.id;
+
+    await runPublishStep(result, "video_processing", () => waitForVideoReady(accessToken, metaVideo.id));
+    let thumbnailUrl = "";
+    try {
+      thumbnailUrl = await getVideoThumbnailUrl(accessToken, metaVideo.id);
+    } catch {
+      result.warnings.push("Meta video thumbnail was not available; creative will use Meta default thumbnail behavior.");
+    }
+
+    metaCreative = await runPublishStep(result, "creative", () =>
+      createVideoAdCreative({
+        accessToken,
+        adAccountId: selectedAdAccount.id,
+        campaign,
+        pageId: selectedPage.id,
+        instagramAccountId: selection.instagramAccountId,
+        videoId: metaVideo.id,
+        thumbnailUrl,
+        link: destinationUrl,
+      }),
+    );
+  } else {
+    const imageHash = await runPublishStep(result, "imageUpload", async () => {
+      const hash = await uploadAdImage(accessToken, selectedAdAccount.id, campaign.creative);
+      return { hash };
+    });
+    result.ids.metaImageHash = imageHash.hash;
+
+    metaCreative = await runPublishStep(result, "creative", () =>
+      createImageAdCreative({
+        accessToken,
+        adAccountId: selectedAdAccount.id,
+        campaign,
+        pageId: selectedPage.id,
+        instagramAccountId: selection.instagramAccountId,
+        imageHash: imageHash.hash,
+        link: destinationUrl,
+      }),
+    );
+  }
   result.ids.metaCreativeId = metaCreative.id;
 
   const metaAd = await runPublishStep(result, "ad", () =>

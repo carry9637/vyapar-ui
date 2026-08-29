@@ -2,7 +2,8 @@ import { Router } from "express";
 import { getMetaOAuthConfig } from "../config/metaOAuth.js";
 import { fetchMetaAssets } from "../services/metaAssetsService.js";
 import {
-  buildMetaAuthorizationUrl,
+  META_OAUTH_STATE_COOKIE,
+  buildMetaAuthorizationRequest,
   exchangeCodeForAccessToken,
   exchangeForLongLivedUserToken,
   getMetaPermissions,
@@ -18,6 +19,32 @@ import {
 } from "../services/metaConnectionStore.js";
 
 const router = Router();
+const OAUTH_COOKIE_PATH = "/api/auth/meta";
+
+function isSecureRequest(req) {
+  return req.secure || String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim() === "https";
+}
+
+function oauthCookieOptions(req, maxAge) {
+  return {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: isSecureRequest(req),
+    path: OAUTH_COOKIE_PATH,
+    ...(maxAge ? { maxAge } : {}),
+  };
+}
+
+function readCookie(req, name) {
+  const cookies = String(req.headers.cookie || "").split(";");
+  const found = cookies.find((cookie) => cookie.trim().startsWith(`${name}=`));
+  if (!found) return "";
+  return decodeURIComponent(found.trim().slice(name.length + 1));
+}
+
+function clearMetaOAuthStateCookie(req, res) {
+  res.clearCookie(META_OAUTH_STATE_COOKIE, oauthCookieOptions(req));
+}
 
 function smartAdsRedirect(status, message = "") {
   const config = getMetaOAuthConfig();
@@ -29,7 +56,8 @@ function smartAdsRedirect(status, message = "") {
 
 router.get("/meta", (req, res) => {
   try {
-    const authorizationUrl = buildMetaAuthorizationUrl(req.query.returnTo);
+    const { authorizationUrl, stateCookie, maxAgeMs } = buildMetaAuthorizationRequest(req.query.returnTo);
+    res.cookie(META_OAUTH_STATE_COOKIE, stateCookie, oauthCookieOptions(req, maxAgeMs));
     return res.redirect(authorizationUrl);
   } catch (error) {
     const normalized = normalizeMetaError(error, "Unable to start Meta OAuth");
@@ -40,6 +68,8 @@ router.get("/meta", (req, res) => {
 
 router.get("/meta/callback", async (req, res) => {
   const { code, state, error, error_description } = req.query;
+  const stateCookie = readCookie(req, META_OAUTH_STATE_COOKIE);
+  clearMetaOAuthStateCookie(req, res);
 
   if (error) {
     const message = String(error_description || error || "Meta login was cancelled.");
@@ -47,7 +77,7 @@ router.get("/meta/callback", async (req, res) => {
     return res.redirect(smartAdsRedirect("error", message));
   }
 
-  if (!validateMetaOAuthState(String(state || ""))) {
+  if (!validateMetaOAuthState(String(state || ""), stateCookie)) {
     const message = "Meta OAuth state is invalid or expired.";
     setMetaConnectionError(message);
     return res.redirect(smartAdsRedirect("error", message));

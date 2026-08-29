@@ -26,7 +26,7 @@ const CLIENT_ORIGINS = [...(process.env.CLIENT_ORIGIN || "").split(","), ...DEFA
 
 app.use(cors({ origin: CLIENT_ORIGINS }));
 app.use("/api/marketing-studio", marketingStudioRoutes);
-app.use(express.json({ limit: "10mb" }));
+app.use(express.json({ limit: "35mb" }));
 app.use("/api/auth", googleAuthRoutes);
 app.use("/api/auth", metaAuthRoutes);
 app.use("/api/google-business", googleBusinessRoutes);

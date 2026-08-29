@@ -17,6 +17,7 @@ import {
   FiTarget,
   FiUpload,
   FiUsers,
+  FiVideo,
   FiX,
   FiZap,
 } from "react-icons/fi";
@@ -45,6 +46,10 @@ const goalOptions = [
 const ctaOptions = ["Send WhatsApp Message", "Learn More", "Shop Now", "Contact Us"];
 const genderOptions = ["All", "Male", "Female"];
 const interestSuggestions = ["Shopping", "Food", "Fitness", "Fashion", "Education", "Technology", "Business", "Travel", "Beauty"];
+const supportedVideoTypes = ["video/mp4", "video/quicktime", "video/x-m4v"];
+const supportedVideoExtensions = [".mp4", ".mov", ".m4v"];
+const maxVideoBytes = 20 * 1024 * 1024;
+const maxVideoDurationSeconds = 10 * 60;
 
 const statusFilters = [
   { id: "all", label: "All" },
@@ -175,9 +180,16 @@ function createEmptyForm() {
     caption: "",
     website: "",
     cta: "Send WhatsApp Message",
+    mediaType: "image",
     creativeSource: "upload",
     uploadDataUrl: "",
     uploadName: "",
+    videoDataUrl: "",
+    videoName: "",
+    videoMimeType: "",
+    videoSize: 0,
+    videoDuration: 0,
+    videoNeedsReselect: false,
     templateId: "",
     sessionDesignId: "",
     gender: "All",
@@ -206,9 +218,16 @@ function formFromCampaign(campaign) {
     caption: campaign.ad?.caption || "",
     website: campaign.ad?.website || "",
     cta: campaign.ad?.cta || "Send WhatsApp Message",
+    mediaType: campaign.creative?.mediaType || (campaign.creative?.videoName ? "video" : "image"),
     creativeSource: campaign.creative?.creativeType || "upload",
     uploadDataUrl: campaign.creative?.uploadDataUrl || "",
     uploadName: campaign.creative?.uploadName || "",
+    videoDataUrl: "",
+    videoName: campaign.creative?.videoName || "",
+    videoMimeType: campaign.creative?.videoMimeType || "",
+    videoSize: campaign.creative?.videoSize || 0,
+    videoDuration: campaign.creative?.videoDuration || 0,
+    videoNeedsReselect: campaign.creative?.mediaType === "video",
     templateId: campaign.creative?.templateId || "",
     sessionDesignId: campaign.creative?.sessionDesignId || "",
     gender: campaign.audience?.gender || "All",
@@ -240,13 +259,19 @@ function campaignFromForm(form, status, inventoryItems, templateOptions, session
     name: form.campaignName.trim() || "Untitled Campaign",
     objective: form.goal,
     creative: {
+      mediaType: form.mediaType,
       creativeType: form.creativeSource,
-      uploadDataUrl: form.creativeSource === "upload" ? form.uploadDataUrl : "",
-      uploadName: form.creativeSource === "upload" ? form.uploadName : "",
-      templateId: form.creativeSource === "marketing-studio" && selectedTemplate ? selectedTemplate.id : null,
-      sessionDesignId: form.creativeSource === "marketing-studio" && selectedSessionDesign ? selectedSessionDesign.id : null,
-      itemId: form.goal === "product" || form.creativeSource === "item-image" ? selectedItem?.id || null : null,
-      imageUrl: form.creativeSource === "item-image" ? itemImage(selectedItem) : "",
+      uploadDataUrl: form.mediaType === "image" && form.creativeSource === "upload" ? form.uploadDataUrl : "",
+      uploadName: form.mediaType === "image" && form.creativeSource === "upload" ? form.uploadName : "",
+      videoName: form.mediaType === "video" ? form.videoName : "",
+      videoMimeType: form.mediaType === "video" ? form.videoMimeType : "",
+      videoSize: form.mediaType === "video" ? Number(form.videoSize) || 0 : 0,
+      videoDuration: form.mediaType === "video" ? Number(form.videoDuration) || 0 : 0,
+      videoNeedsReselect: form.mediaType === "video" && !form.videoDataUrl,
+      templateId: form.mediaType === "image" && form.creativeSource === "marketing-studio" && selectedTemplate ? selectedTemplate.id : null,
+      sessionDesignId: form.mediaType === "image" && form.creativeSource === "marketing-studio" && selectedSessionDesign ? selectedSessionDesign.id : null,
+      itemId: form.goal === "product" || (form.mediaType === "image" && form.creativeSource === "item-image") ? selectedItem?.id || null : null,
+      imageUrl: form.mediaType === "image" && form.creativeSource === "item-image" ? itemImage(selectedItem) : "",
     },
     ad: {
       headline: form.headline.trim(),
@@ -290,6 +315,7 @@ function campaignWithPublishResult(campaign, publish, status, message = "") {
       campaignId: ids.metaCampaignId || null,
       adSetId: ids.metaAdSetId || null,
       imageHash: ids.metaImageHash || null,
+      videoId: ids.metaVideoId || null,
       creativeId: ids.metaCreativeId || null,
       adId: ids.metaAdId || null,
       publishStatus: publish?.safeStatus || "PAUSED",
@@ -301,6 +327,7 @@ function campaignWithPublishResult(campaign, publish, status, message = "") {
 }
 
 function resolveCreativeImage(form, inventoryItems, templateOptions, sessionDesigns) {
+  if (form.mediaType === "video") return "";
   if (form.creativeSource === "upload") return form.uploadDataUrl;
   if (form.creativeSource === "item-image") {
     const selectedItem = inventoryItems.find((item) => item.id === form.selectedItemId);
@@ -311,11 +338,15 @@ function resolveCreativeImage(form, inventoryItems, templateOptions, sessionDesi
   return selectedTemplate?.thumbnail || selectedSessionDesign?.thumbnail || selectedSessionDesign?.background?.src || "";
 }
 
+function resolveCreativeVideo(form) {
+  return form.mediaType === "video" ? form.videoDataUrl : "";
+}
+
 function readBlobAsDataUrl(blob) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result || ""));
-    reader.onerror = () => reject(new Error("Unable to read creative image."));
+    reader.onerror = () => reject(new Error("Unable to read creative file."));
     reader.readAsDataURL(blob);
   });
 }
@@ -328,6 +359,55 @@ async function resolvePublishableCreativeDataUrl(imageUrl) {
   const response = await fetch(imageUrl);
   if (!response.ok) throw new Error("Unable to load the selected creative image for publishing.");
   return readBlobAsDataUrl(await response.blob());
+}
+
+function isSupportedVideoFile(file) {
+  const name = String(file?.name || "").toLowerCase();
+  return supportedVideoTypes.includes(file?.type) || supportedVideoExtensions.some((extension) => name.endsWith(extension));
+}
+
+function getVideoDuration(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const video = document.createElement("video");
+    video.preload = "metadata";
+    video.onloadedmetadata = () => {
+      URL.revokeObjectURL(url);
+      resolve(Number.isFinite(video.duration) ? video.duration : 0);
+    };
+    video.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("Unable to read video duration. Try another MP4 or MOV file."));
+    };
+    video.src = url;
+  });
+}
+
+async function readValidatedVideoFile(file) {
+  if (!file) return null;
+  if (!file.type.startsWith("video/")) throw new Error("Choose a video file.");
+  if (!isSupportedVideoFile(file)) throw new Error("Use an MP4 or MOV video for Meta publishing.");
+  if (file.size > maxVideoBytes) throw new Error("Video must be 20 MB or smaller for this upload flow.");
+
+  let duration;
+  try {
+    duration = await getVideoDuration(file);
+  } catch {
+    duration = 0;
+  }
+  if (duration > maxVideoDurationSeconds) throw new Error("Video must be 10 minutes or shorter for this Smart Ads flow.");
+
+  return {
+    dataUrl: await readBlobAsDataUrl(file),
+    duration,
+  };
+}
+
+function resolvePublishableVideoDataUrl(form) {
+  if (form.mediaType !== "video") return "";
+  if (!form.videoDataUrl) throw new Error("Re-select the video before publishing. Browser video files are not stored in drafts.");
+  if (!String(form.videoDataUrl).startsWith("data:video/")) throw new Error("A publishable MP4 or MOV video file is required.");
+  return form.videoDataUrl;
 }
 
 function hasPublishableDestination(value = "") {
@@ -445,7 +525,7 @@ function MetaConnectionCard({
               {connected ? connectedStatusLabel : configured ? "Not Connected" : "Configuration Missing"}
             </span>
           </p>
-          {status.user?.name && <p className="mt-1 truncate text-xs font-bold text-slate-500">Connected as {status.user.name}</p>}
+          {connected && status.user?.name && <p className="mt-1 truncate text-xs font-bold text-slate-500">Connected as {status.user.name}</p>}
         </div>
       </div>
 
@@ -549,13 +629,14 @@ function MetaConnectionCard({
   );
 }
 
-function AdPreview({ form, creativeImage, selectedItem, captionTouched = false }) {
-  const hasItemCreative = form.creativeSource === "item-image" && selectedItem && creativeImage;
+function AdPreview({ form, creativeImage, creativeVideo, selectedItem, captionTouched = false }) {
+  const isVideo = form.mediaType === "video";
+  const hasItemCreative = !isVideo && form.creativeSource === "item-image" && selectedItem && creativeImage;
   const displayTitle = hasItemCreative ? itemDisplayName(selectedItem) : form.headline || "Your ad headline";
   const displayMeta = hasItemCreative ? itemMetaLine(selectedItem) : "";
   const shouldShowCampaignCaption = form.caption && (!hasItemCreative || captionTouched);
   const displayCaption = shouldShowCampaignCaption ? form.caption : hasItemCreative ? "Add a short message in Step 1 to support this product ad." : "Write a short message that tells customers what to do next.";
-  const emptyMessage = form.creativeSource === "item-image" ? "Select an item image to preview your ad" : "Select or upload a creative";
+  const emptyMessage = isVideo ? "Upload an MP4 or MOV video to preview your ad" : form.creativeSource === "item-image" ? "Select an item image to preview your ad" : "Select or upload a creative";
 
   return (
     <Card className="overflow-hidden shadow-sm">
@@ -571,12 +652,14 @@ function AdPreview({ form, creativeImage, selectedItem, captionTouched = false }
           </div>
         </div>
         <div className="grid aspect-[4/3] place-items-center overflow-hidden rounded-xl border border-slate-200 bg-slate-100 p-3">
-          {creativeImage ? (
+          {isVideo && creativeVideo ? (
+            <video src={creativeVideo} controls className="max-h-full max-w-full rounded-lg object-contain" />
+          ) : creativeImage ? (
             <img src={creativeImage} alt="" className="max-h-full max-w-full object-contain" />
           ) : (
             <div className="grid min-h-52 place-items-center text-center text-sm font-bold text-slate-400">
               <span>
-                <FiImage className="mx-auto mb-2 text-2xl" />
+                {isVideo ? <FiVideo className="mx-auto mb-2 text-2xl" /> : <FiImage className="mx-auto mb-2 text-2xl" />}
                 {emptyMessage}
               </span>
             </div>
@@ -658,6 +741,7 @@ function SmartAds() {
 
   const templateOptions = useMemo(() => marketingTemplates.slice(0, 10), []);
   const creativeImage = resolveCreativeImage(form, inventoryItems, templateOptions, sessionDesigns);
+  const creativeVideo = resolveCreativeVideo(form);
   const selectedItem = inventoryItems.find((item) => item.id === form.selectedItemId);
   const itemImageOptions = inventoryItems.filter((item) => itemImage(item));
   const estimatedBudget = Math.max(Number(form.dailyBudget) || 0, 0) * Math.max(Number(form.durationDays) || 0, 0);
@@ -744,7 +828,7 @@ function SmartAds() {
     }));
   }
 
-  function handleUpload(event) {
+  function handleImageUpload(event) {
     const file = event.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
@@ -752,6 +836,7 @@ function SmartAds() {
       setTouched((current) => ({ ...current, creative: true }));
       setForm((current) => ({
         ...current,
+        mediaType: "image",
         creativeSource: "upload",
         uploadDataUrl: String(reader.result || ""),
         uploadName: file.name,
@@ -760,6 +845,33 @@ function SmartAds() {
       }));
     };
     reader.readAsDataURL(file);
+  }
+
+  async function handleVideoUpload(event) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+
+    try {
+      const video = await readValidatedVideoFile(file);
+      setTouched((current) => ({ ...current, creative: true }));
+      setForm((current) => ({
+        ...current,
+        mediaType: "video",
+        creativeSource: "upload",
+        videoDataUrl: video.dataUrl,
+        videoName: file.name,
+        videoMimeType: file.type || "video/mp4",
+        videoSize: file.size,
+        videoDuration: Math.round(video.duration),
+        videoNeedsReselect: false,
+        templateId: "",
+        sessionDesignId: "",
+      }));
+      setError("");
+    } catch (videoError) {
+      setError(videoError.message || "Unable to use this video file.");
+    }
   }
 
   function addLocation() {
@@ -797,6 +909,10 @@ function SmartAds() {
     }
 
     if (stepIndex === 1) {
+      if (form.mediaType === "video") {
+        if (!form.videoDataUrl) return form.videoName ? "Re-select the video before publishing. Browser video files are not stored in drafts." : "Upload an MP4 or MOV video.";
+        return "";
+      }
       if (form.creativeSource === "upload" && !form.uploadDataUrl) return "Upload a creative image.";
       if (form.creativeSource === "marketing-studio" && !form.templateId && !form.sessionDesignId) return "Select a Marketing Studio design.";
       if (form.creativeSource === "item-image") {
@@ -888,12 +1004,22 @@ function SmartAds() {
     const baseCampaign = campaignFromForm(form, "published", inventoryItems, templateOptions, sessionDesigns);
 
     try {
-      const imageDataUrl = await resolvePublishableCreativeDataUrl(creativeImage);
+      const imageDataUrl = form.mediaType === "image" ? await resolvePublishableCreativeDataUrl(creativeImage) : "";
+      const videoDataUrl = form.mediaType === "video" ? resolvePublishableVideoDataUrl(form) : "";
       const response = await publishMetaCampaign({
         ...baseCampaign,
         creative: {
           ...baseCampaign.creative,
-          imageDataUrl,
+          ...(imageDataUrl ? { imageDataUrl } : {}),
+          ...(videoDataUrl
+            ? {
+                videoDataUrl,
+                videoName: form.videoName,
+                videoMimeType: form.videoMimeType,
+                videoSize: form.videoSize,
+                videoDuration: form.videoDuration,
+              }
+            : {}),
         },
       });
       const saved = saveSmartAdsCampaign(campaignWithPublishResult(baseCampaign, response.publish, "published"));
@@ -905,7 +1031,7 @@ function SmartAds() {
     } catch (publishError) {
       const publish = publishError.payload?.publish;
       const partialIds = publish?.ids || {};
-      const hasPartialMetaObject = Boolean(partialIds.metaCampaignId || partialIds.metaAdSetId || partialIds.metaCreativeId || partialIds.metaAdId);
+      const hasPartialMetaObject = Boolean(partialIds.metaCampaignId || partialIds.metaAdSetId || partialIds.metaVideoId || partialIds.metaCreativeId || partialIds.metaAdId);
 
       if (hasPartialMetaObject) {
         const formattedError = formatMetaPublishError(publishError);
@@ -1152,7 +1278,7 @@ function SmartAds() {
             </div>
           </div>
         </Card>
-        <AdPreview form={form} creativeImage={creativeImage} selectedItem={selectedItem} captionTouched={touched.caption} />
+        <AdPreview form={form} creativeImage={creativeImage} creativeVideo={creativeVideo} selectedItem={selectedItem} captionTouched={touched.caption} />
       </div>
     );
   }
@@ -1163,10 +1289,38 @@ function SmartAds() {
         <Card className="p-5 shadow-sm">
           <div className="flex flex-wrap gap-2">
             {[
-              { id: "upload", label: "Upload Creative", icon: FiUpload },
-              { id: "marketing-studio", label: "Marketing Studio", icon: FiImage },
-              { id: "item-image", label: "Item Image", icon: FiPackage },
-            ].map((source) => {
+              { id: "image", label: "Image", icon: FiImage },
+              { id: "video", label: "Video", icon: FiVideo },
+            ].map((type) => {
+              const TypeIcon = type.icon;
+              return (
+                <button
+                  key={type.id}
+                  type="button"
+                  onClick={() => {
+                    setTouched((current) => ({ ...current, creative: true }));
+                    updateForm({
+                      mediaType: type.id,
+                      creativeSource: "upload",
+                      ...(type.id === "image" ? { videoDataUrl: "", videoNeedsReselect: false } : {}),
+                    });
+                  }}
+                  className={cx("inline-flex h-10 items-center gap-2 rounded-full border px-4 text-sm font-black", form.mediaType === type.id ? "border-slate-950 bg-slate-950 text-white" : "border-slate-200 text-slate-600 hover:bg-slate-50")}
+                >
+                  <TypeIcon />
+                  {type.label}
+                </button>
+              );
+            })}
+          </div>
+
+          {form.mediaType === "image" && (
+            <div className="mt-4 flex flex-wrap gap-2">
+              {[
+                { id: "upload", label: "Upload Creative", icon: FiUpload },
+                { id: "marketing-studio", label: "Marketing Studio", icon: FiImage },
+                { id: "item-image", label: "Item Image", icon: FiPackage },
+              ].map((source) => {
                 const SourceIcon = source.icon;
                 return (
                   <button
@@ -1182,23 +1336,45 @@ function SmartAds() {
                     {source.label}
                   </button>
                 );
-            })}
-          </div>
+              })}
+            </div>
+          )}
 
-          {form.creativeSource === "upload" && (
+          {form.mediaType === "image" && form.creativeSource === "upload" && (
             <div className="mt-5 rounded-xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center">
               <FiUpload className="mx-auto text-3xl text-blue-600" />
               <p className="mt-3 text-sm font-black text-slate-950">Upload an image creative</p>
               <p className="mt-1 text-xs font-semibold text-slate-500">PNG or JPG works best. This can be published after Review.</p>
               <label className="mt-4 inline-flex h-10 cursor-pointer items-center justify-center rounded-full bg-slate-950 px-5 text-sm font-black text-white">
                 Choose Image
-                <input type="file" accept="image/*" onChange={handleUpload} className="hidden" />
+                <input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" />
               </label>
               {form.uploadName && <p className="mt-3 text-xs font-bold text-slate-500">{form.uploadName}</p>}
             </div>
           )}
 
-          {form.creativeSource === "marketing-studio" && (
+          {form.mediaType === "video" && (
+            <div className="mt-5 rounded-xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center">
+              <FiVideo className="mx-auto text-3xl text-blue-600" />
+              <p className="mt-3 text-sm font-black text-slate-950">Upload a video creative</p>
+              <p className="mt-1 text-xs font-semibold text-slate-500">MP4 or MOV, up to 20 MB and 10 minutes. Select again after reopening a draft.</p>
+              <label className="mt-4 inline-flex h-10 cursor-pointer items-center justify-center rounded-full bg-slate-950 px-5 text-sm font-black text-white">
+                Choose Video
+                <input type="file" accept="video/mp4,video/quicktime,video/x-m4v,.mp4,.mov,.m4v" onChange={handleVideoUpload} className="hidden" />
+              </label>
+              {form.videoName && (
+                <div className="mt-3 text-xs font-bold text-slate-500">
+                  <p>{form.videoName}</p>
+                  <p>
+                    {form.videoDuration ? `${Math.round(form.videoDuration)} sec` : "Duration not saved"} {form.videoSize ? `- ${(form.videoSize / (1024 * 1024)).toFixed(1)} MB` : ""}
+                  </p>
+                  {form.videoNeedsReselect && <p className="mt-2 text-amber-600">Re-select this video before publishing.</p>}
+                </div>
+              )}
+            </div>
+          )}
+
+          {form.mediaType === "image" && form.creativeSource === "marketing-studio" && (
             <div className="mt-5">
               <p className="text-sm font-black text-slate-950">Choose a reusable design</p>
               <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
@@ -1238,7 +1414,7 @@ function SmartAds() {
             </div>
           )}
 
-          {form.creativeSource === "item-image" && (
+          {form.mediaType === "image" && form.creativeSource === "item-image" && (
             <div className="mt-5">
               <p className="text-sm font-black text-slate-950">Use an existing item image</p>
               {!form.selectedItemId && <p className="mt-1 text-xs font-bold text-slate-500">Select an item image to preview your ad.</p>}
@@ -1270,7 +1446,7 @@ function SmartAds() {
             </div>
           )}
         </Card>
-        <AdPreview form={form} creativeImage={creativeImage} selectedItem={selectedItem} captionTouched={touched.caption} />
+        <AdPreview form={form} creativeImage={creativeImage} creativeVideo={creativeVideo} selectedItem={selectedItem} captionTouched={touched.caption} />
       </div>
     );
   }
@@ -1435,17 +1611,18 @@ function SmartAds() {
   }
 
   function renderReviewStep() {
-    const creativeSourceLabel = form.creativeSource === "marketing-studio" ? "Marketing Studio" : form.creativeSource === "item-image" ? "Item Image" : "Uploaded Creative";
+    const creativeSourceLabel = form.mediaType === "video" ? "Uploaded Video" : form.creativeSource === "marketing-studio" ? "Marketing Studio" : form.creativeSource === "item-image" ? "Item Image" : "Uploaded Creative";
 
     return (
       <div className="grid gap-5 lg:grid-cols-[1fr_360px]">
-        <AdPreview form={form} creativeImage={creativeImage} selectedItem={selectedItem} captionTouched={touched.caption} />
+        <AdPreview form={form} creativeImage={creativeImage} creativeVideo={creativeVideo} selectedItem={selectedItem} captionTouched={touched.caption} />
         <Card className="p-5 shadow-sm">
           <p className="text-sm font-black text-slate-950">Campaign Summary</p>
           <div className="mt-4 space-y-3 text-sm">
             {[
               ["Campaign", form.campaignName || "Untitled Campaign"],
               ["Goal", objectiveLabel(form.goal)],
+              ["Creative Type", form.mediaType === "video" ? "Video" : "Image"],
               ["Creative Source", creativeSourceLabel],
               ["CTA", form.cta],
               ["Gender", form.gender],
@@ -1584,7 +1761,12 @@ function SmartAds() {
                 filteredCampaigns.map((campaign) => (
                   <article key={campaign.id} className="grid gap-4 rounded-xl border border-slate-200 bg-white p-3 shadow-sm lg:grid-cols-[96px_1fr_auto]">
                     <div className="grid h-24 place-items-center overflow-hidden rounded-lg bg-slate-100">
-                      {campaign.creative.uploadDataUrl || campaign.creative.imageUrl ? (
+                      {campaign.creative.mediaType === "video" ? (
+                        <div className="text-center text-slate-400">
+                          <FiVideo className="mx-auto text-2xl" />
+                          <span className="mt-1 block text-[10px] font-black uppercase">Video</span>
+                        </div>
+                      ) : campaign.creative.uploadDataUrl || campaign.creative.imageUrl ? (
                         <img src={campaign.creative.uploadDataUrl || campaign.creative.imageUrl} alt="" className="h-full w-full object-contain" />
                       ) : campaign.creative.templateId ? (
                         <img src={marketingTemplates.find((template) => template.id === campaign.creative.templateId)?.thumbnail} alt="" className="h-full w-full object-contain" />
@@ -1596,6 +1778,7 @@ function SmartAds() {
                       <div className="flex flex-wrap items-center gap-2">
                         <h3 className="text-base font-black text-slate-950">{campaign.name}</h3>
                         <StatusBadge status={campaign.status} />
+                        <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-black text-slate-600">{campaign.creative.mediaType === "video" ? "Video" : "Image"}</span>
                       </div>
                       <p className="mt-1 text-sm font-semibold text-slate-600">{campaign.ad.headline || objectiveLabel(campaign.objective)}</p>
                       <div className="mt-3 grid gap-2 text-xs font-bold text-slate-500 sm:grid-cols-2 xl:grid-cols-4">
@@ -1608,6 +1791,7 @@ function SmartAds() {
                         <span>Spend: {formatCurrency(campaign.analytics.spend)}</span>
                         <span>Created: {formatDate(campaign.createdAt?.slice(0, 10))}</span>
                         {campaign.meta?.campaignId && <span>Meta Campaign: {campaign.meta.campaignId}</span>}
+                        {campaign.meta?.videoId && <span>Meta Video: {campaign.meta.videoId}</span>}
                         {campaign.meta?.publishStatus && <span>Meta Status: {campaign.meta.publishStatus}</span>}
                       </div>
                       {campaign.meta?.lastError && <p className="mt-3 text-xs font-bold text-rose-600">{campaign.meta.lastError}</p>}

@@ -2,156 +2,95 @@
 
 ## Purpose
 
-- Smart Ads is the Business Growth area for planning promotional ad campaigns.
-- The current version supports real Meta OAuth connection, asset selection, real paused Meta publishing, and local campaign records.
-- It discovers Business Portfolios, Facebook Pages, optional linked Instagram accounts, and Ad Accounts after login.
-- Real analytics, database storage, and payments are still future work.
+- Smart Ads lets a business prepare Meta/Facebook ad campaigns from uploaded creatives, uploaded videos, Marketing Studio designs, or existing inventory item images.
+- The current frontend/demo version supports dashboard, 5-step ad creation, real Meta OAuth, real asset discovery, and real paused Meta image/video object publishing.
+- Real analytics, durable database persistence, and final production delivery verification are later production work.
 
-## Current Flow
+## Current User Flow
 
-Smart Ads Dashboard
--> Connect Meta
--> Meta OAuth
--> Backend token
--> Fetch Meta assets
--> Select Business Portfolio
--> Refresh Pages / Ad Accounts / optional Instagram for that selection
--> Select Page / Instagram / Ad Account
--> Create Ad
--> Ad Details
--> Creative
--> Audience
--> Budget & Schedule
--> Review
--> Save Draft / Create Campaign
--> Backend publishes Campaign / Ad Set / Creative / Ad as paused Meta objects
--> Campaign Dashboard
+Smart Ads Dashboard -> Connect Meta -> Meta OAuth -> Fetch Business/Page/Instagram/Ad Account assets -> Select assets -> Create Ad -> Ad Details -> Creative -> Audience -> Budget & Schedule -> Review -> Save Draft / Create Campaign -> Campaign Dashboard.
 
-## Files Created
+## Frontend Status
 
-- `src/pages/BusinessGrowth/SmartAds/SmartAds.jsx`
-  - Created for the Smart Ads dashboard and 5-step builder.
-  - Handles campaign UI, creative selection, preview, validation, draft reopen/edit, and demo Meta messaging.
+- Dashboard, campaign metrics, status filters, campaign cards, draft reopen/edit, and local campaign records are implemented.
+- The 5-step builder supports Ad Details, Creative, Audience, Budget & Schedule, and Review.
+- Creative supports Image and Video types inside the existing Step 02 flow.
+- Image supports Upload Creative, Marketing Studio templates/session designs, and existing Item Image selection.
+- Video currently supports Upload Video only, with MP4/MOV selection, file-size validation, metadata display, and HTML video preview.
+- Video drafts store file metadata only; users must re-select the raw video file before publishing after refresh/reopen.
+- Selected item image/name/category/price/unit stay synchronized from the shared inventory item source.
+- Audience prototype supports location, Pan India, gender, age, interests, and validation.
+- Budget/duration calculation, schedule fields, review summary, publish validation, and detailed publish errors are implemented.
+- Metrics and campaign analytics are still local/demo, not Meta Insights.
 
-- `src/services/smartAdsStorage.js`
-  - Created as the Smart Ads persistence boundary.
-  - Handles local campaign normalization, save/load, analytics defaults, and null Meta IDs.
+## Backend / Meta Integration Status
 
-- `src/services/smartAdsMetaService.js`
-  - Created as the frontend Meta API client.
-  - Starts OAuth, loads connection/assets, saves selected assets, disconnects, and calls real publish.
+- Express Meta OAuth is implemented with backend-only App Secret use, OAuth state validation, code exchange, long-lived token exchange, `/me`, and permissions fetch.
+- Asset discovery fetches Business Portfolios, Facebook Pages, Ad Accounts, and optional linked Instagram professional accounts.
+- Selected Business/Page/Instagram/Ad Account are stored in temporary server memory for this phase.
+- Meta tokens are stored backend-only in memory; the frontend receives only public-safe connection and asset data.
+- Production Vercel frontend and Render backend are supported through environment-driven URLs and CORS configuration.
 
-- `server/src/config/metaOAuth.js`
-  - Created for backend-only Meta env configuration.
-  - Reads App ID, App Secret, redirect URI, Graph version, and optional Login config ID.
+## Real Publishing Flow
 
-- `server/src/routes/metaAuth.js`
-  - Created for Meta OAuth routes.
-  - Handles auth start, callback, status, and disconnect with OAuth state validation.
+- `POST /api/meta/ads/publish` uses the selected real Facebook Page and real Ad Account.
+- Campaign is created in `PAUSED` state with `special_ad_categories: []` and `is_adset_budget_sharing_enabled: false`.
+- Daily budget remains on the Ad Set, which is also created in `PAUSED` state.
+- Image upload uses the real Meta Ad Images endpoint and returns a real image hash.
+- Video upload uses the real Meta Ad Videos endpoint and returns a real Meta video ID.
+- Video processing is checked before creative creation; if Meta is still processing, the partial publish record keeps the real video ID and fails clearly.
+- Preferred Meta video thumbnail is used when available; otherwise the creative relies on Meta default thumbnail behavior.
+- Image creatives use `link_data.image_hash`; video creatives use `video_data.video_id`.
+- Creative is created with Page identity, optional Instagram actor, destination URL, text, and CTA.
+- Final Ad is created in `PAUSED` state; no fake IDs or demo success fallback are used.
+- Failed Meta steps return safe error details including step, code, subcode, user message, and fbtrace ID where provided.
 
-- `server/src/routes/metaBusiness.js`
-  - Created for Meta asset APIs.
-  - Validates tokens, returns refreshed/scoped assets, and saves temporary asset selection.
+## Live Test Status
 
-- `server/src/routes/metaAds.js`
-  - Created for Meta ad publishing.
-  - Exposes `POST /api/meta/ads/publish` for the real paused publish flow.
+- Production frontend, production backend, published Meta app, OAuth login, real connection, and real asset fetch are verified.
+- Real Campaign creation has been verified and returned a real Meta Campaign ID.
+- Previous blockers fixed: campaign budget-sharing requirement and stale/today 1-day schedule handling.
+- Current external blocker: the selected Meta test Ad Account requires a valid Meta payment method.
+- Final live image/video Ad delivery is not verified yet; all Meta objects intentionally remain `PAUSED`.
 
-- `server/src/services/metaOAuthService.js`
-  - Created for Meta OAuth and Graph helpers.
-  - Builds auth URL, exchanges code/token, reads `/me`, reads permissions, and posts Graph calls.
+## Current Architecture
 
-- `server/src/services/metaAssetsService.js`
-  - Created for Meta asset discovery.
-  - Fetches and normalizes businesses, user/business Pages, optional Instagram links, and ad accounts.
+- Frontend page: `src/pages/BusinessGrowth/SmartAds/SmartAds.jsx`.
+- Frontend Meta API client: `src/services/smartAdsMetaService.js`.
+- Frontend draft/campaign storage: `src/services/smartAdsStorage.js` using `localStorage`.
+- Backend routes: `server/src/routes/metaAuth.js`, `server/src/routes/metaBusiness.js`, `server/src/routes/metaAds.js`.
+- Backend services: `server/src/services/metaOAuthService.js`, `metaAssetsService.js`, `metaAdsService.js`, `metaConnectionStore.js`.
+- Config: `server/src/config/metaOAuth.js`, `server/.env.example`, production environment variables.
 
-- `server/src/services/metaAdsService.js`
-  - Created for Meta Marketing API publishing.
-  - Creates Campaign, Ad Set, image upload, Ad Creative, and final Ad in `PAUSED` state.
+## PostgreSQL Plan
 
-- `server/src/services/metaConnectionStore.js`
-  - Created for temporary in-memory Meta connection state.
-  - Keeps backend-only tokens and exposes public-safe status/assets/selection/reconnect state.
+- `users`: app users/operators; relates to businesses and campaign ownership.
+- `businesses`: tenant/business profile; owns Meta connections, assets, and campaigns.
+- `meta_connections`: encrypted Meta token, Meta user ID, permissions, status, expiry, reconnect/error state.
+- `meta_business_assets`: discovered businesses, Pages, Instagram accounts, and Ad Accounts with selected flags.
+- `smart_ad_campaigns`: local campaign record, Meta Campaign ID, objective, status, publish state, failure details.
+- `smart_ad_adsets`: Meta Ad Set ID, budget, currency, schedule, targeting snapshot, Meta status.
+- `smart_ad_creatives`: image source/hash, text, CTA, URL, Page/Instagram identity, Meta Creative ID.
+- `smart_ads`: final Meta Ad ID, linked campaign/adset/creative, status, publish error state.
+- `smart_ad_targeting`: normalized locations, age, gender, interest IDs/raw labels.
+- `smart_ad_insights`: synced spend, reach, impressions, clicks, CTR, CPC, CPM, results by date.
 
-- `docs/features/smart-ads.md`
-  - Created as the single Smart Ads feature note.
-  - Tracks current behavior, reused systems, changed files, storage, and pending work.
+## Production Pending
 
-## Files Changed
+- Add PostgreSQL persistence, encrypted token storage, tenant isolation, and durable campaign/asset records.
+- Add real Meta Insights sync, campaign status refresh, retry/cleanup for partial publishes, and audit logs.
+- Add production-grade location/interest targeting search using Meta targeting IDs.
+- Complete final live image and video publish verification with a payment-enabled production Ad Account.
+- Confirm required Meta permissions/access tiers for external client use after App Review.
+- Add deletion/revocation tooling backed by the future database.
 
-- `src/App.jsx`
-  - Added the `/business-growth/smart-ads` route.
-  - Needed so the existing Sidebar entry opens the Smart Ads page through `MainLayout` and `Outlet`.
+## Security Status
 
-- `server/src/index.js`
-  - Mounted Meta auth, asset, and ads publish routes; raised JSON body limit for creative uploads.
-  - Needed so Express can start OAuth, serve assets, and publish real paused Meta ads.
+- Done: App Secret stays backend-only, tokens are not exposed to frontend, OAuth state is validated, public status omits tokens, and errors are token-safe.
+- Done: frontend uses backend API routes for Meta work; no Meta secret is stored in Vite/client code.
+- Partial: CORS is environment-driven but still supports local development origins.
+- Pending: encrypted PostgreSQL token storage, auth/tenant boundaries, audit logging, token lifecycle jobs, and production deletion workflow.
 
-- `server/.env.example`
-  - Added Meta env placeholders only.
-  - Needed for local setup without committing credentials.
+## Manager Explanation
 
-- `src/services/marketingStudio/sessionDesignService.js`
-  - Added `getSessionDesigns()`.
-  - Needed so Smart Ads can reuse saved Marketing Studio session designs without duplicating storage logic.
-
-## What Is Working
-
-- Smart Ads dashboard with campaign metrics and status filters.
-- Connect Meta starts real backend OAuth when Meta env config is present.
-- OAuth callback exchanges the code server-side and stores tokens backend-only in memory.
-- Meta status, disconnect, asset refresh, and temporary asset selection APIs work.
-- Refresh Meta validates the token and re-fetches user, permissions, businesses, Pages, Ad Accounts, and optional Instagram links.
-- Business Portfolio selection reloads dependent assets and clears stale Page/Instagram/Ad Account selections.
-- Page discovery uses real user Pages plus business owned/client Pages, with dedupe and safe empty/error states.
-- Ad Account discovery uses real user Ad Accounts plus business owned/client Ad Accounts, with dedupe and safe empty/error states.
-- Instagram discovery is optional and does not require `instagram_basic` in the current OAuth scope set.
-- Connected UI can select Business Portfolio, Facebook Page, linked Instagram account, and Ad Account.
-- Missing config, expired/revoked token, backend errors, no Page, no Instagram, and no Ad Account states are handled.
-- 5-step Create Ad flow: Ad Details, Creative, Audience, Budget & Schedule, Review.
-- Inventory item/service reuse for product/service campaigns.
-- Upload Creative image selection.
-- Marketing Studio template and saved session design creative selection.
-- Item Image creative selection from existing inventory images.
-- Selected item image/name/category/price/unit stay synchronized from `selectedItemId`.
-- No random inventory item is selected when the Creative step opens.
-- Inventory image cards use fixed media frames, preserved image ratios, and text below images.
-- Ad Preview uses a stable media frame, clearer title/meta/caption hierarchy, and source-specific data.
-- Creative source switching between Upload, Marketing Studio, and Item Image avoids stale preview mixing.
-- Audience prototype supports gender, Pan India/target locations, age validation, and interests.
-- Budget calculation uses daily budget multiplied by duration days.
-- Schedule supports all-day or custom start/end time.
-- Review shows entered campaign, creative, audience, budget, and schedule data.
-- Create Campaign on Review publishes real Meta Campaign, Ad Set, image, Creative, and Ad in paused state.
-- Selected real Facebook Page and real Ad Account are required before publishing.
-- Campaign creation explicitly disables ad-set budget sharing because Smart Ads keeps daily budget on the Ad Set.
-- Ad Set schedule dates are normalized server-side at publish time so stale/today 1-day campaigns keep a future end time.
-- Publish failures now surface the exact failed Meta step plus safe code/subcode/user message/fbtrace details.
-- Placeholder website URLs are blocked before Meta object creation.
-- Uploaded, item, Marketing Studio, and session design images are converted to publishable image data before backend upload.
-- Unsupported custom interest names are omitted from Meta targeting until targeting-search IDs are added.
-- Partial publish failures return the completed step IDs and save a failed local campaign record.
-- Save Draft persists locally and drafts can be reopened/edited.
-- Existing local/demo campaign records remain local/demo.
-
-## Reused Existing Features
-
-- Items/inventory from `itemsStorage.js`.
-- Existing pricing helper `calculateInventoryItemPricing`.
-- Marketing Studio templates from `templateRegistry.js`.
-- Marketing Studio session designs from `sessionDesignService.js`.
-- Existing frontend local-storage service pattern.
-
-## Current Storage
-
-Smart Ads campaigns, drafts, real Meta IDs, publish status, and publish errors save in browser `localStorage` through `src/services/smartAdsStorage.js`.
-Meta connection state and selected assets are temporary in-memory Express state for this phase.
-Assets are always returned from real Meta API responses; no fake Page, Instagram, Business, or Ad Account records are generated.
-Real Meta objects are created paused; no Insights are read yet.
-There is no real database, payment handling, or live analytics yet.
-
-## Pending
-
-- Real analytics.
-- Backend/database integration.
-- Persistent encrypted token storage.
+Smart Ads is now beyond a static demo: it can connect to Meta, fetch real business assets, and start the real paused ad publishing flow. The current app is blocked externally by a Meta test Ad Account payment-method requirement before final Ad delivery can be verified. We still need PostgreSQL, encrypted token storage, real Insights, status sync, and production account validation before calling it fully production-ready.
