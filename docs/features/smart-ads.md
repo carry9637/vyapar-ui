@@ -40,12 +40,13 @@ Smart Ads Dashboard -> Connect Meta -> Meta OAuth -> Fetch Business/Page/Instagr
 - Image upload uses the real Meta Ad Images endpoint and returns a real image hash.
 - Video upload uses the real Meta Ad Videos endpoint and returns a real Meta video ID.
 - Video processing is checked before creative creation; if Meta is still processing, the partial publish record keeps the real video ID and fails clearly.
-- Meta video creative requires a thumbnail reference, so the backend fetches the uploaded video's real `picture`/thumbnail URL and sends it as `video_data.image_url`.
-- Image creatives use `link_data.image_hash`; video creatives use `video_data.video_id` plus `video_data.image_url`.
+- Meta video creative requires a thumbnail reference, so the backend fetches the uploaded video's real `picture`/thumbnail URL, downloads that image, uploads it to the Ad Account `/adimages` endpoint, and sends the returned `video_data.image_hash`.
+- Image creatives use `link_data.image_hash`; video creatives use `video_data.video_id` plus a real thumbnail `video_data.image_hash`.
 - Retry after a partial video publish can reuse the stored real Meta video ID instead of uploading the same video again.
 - Creative is created with Page identity, optional Instagram actor, destination URL, text, and CTA.
 - Final Ad is created in `PAUSED` state; no fake IDs or demo success fallback are used.
 - Failed Meta steps return safe error details including step, code, subcode, user message, and fbtrace ID where provided.
+- Video creative diagnostics log only safe details such as video ID, thumbnail source, thumbnail host, and outgoing payload keys; tokens and signed URL query strings are not logged.
 
 ## Live Test Status
 
@@ -82,7 +83,7 @@ Smart Ads Dashboard -> Connect Meta -> Meta OAuth -> Fetch Business/Page/Instagr
 - Add PostgreSQL persistence, encrypted token storage, tenant isolation, and durable campaign/asset records.
 - Add real Meta Insights sync, campaign status refresh, retry/cleanup for partial publishes, and audit logs.
 - Add production-grade location/interest targeting search using Meta targeting IDs.
-- Complete final live image and video publish verification with a payment-enabled production Ad Account.
+- Complete final live image and video publish verification with a payment-enabled production Ad Account; confirm Meta accepts generated video thumbnail image hashes end-to-end.
 - Confirm required Meta permissions/access tiers for external client use after App Review.
 - Add deletion/revocation tooling backed by the future database.
 

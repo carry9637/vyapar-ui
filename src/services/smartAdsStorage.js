@@ -98,6 +98,7 @@ export function normalizeSmartAdsCampaign(campaign = {}) {
       adSetId: campaign.meta?.adSetId || campaign.meta?.metaAdSetId || null,
       imageHash: campaign.meta?.imageHash || campaign.meta?.metaImageHash || null,
       videoId: campaign.meta?.videoId || campaign.meta?.metaVideoId || null,
+      thumbnailImageHash: campaign.meta?.thumbnailImageHash || campaign.meta?.metaVideoThumbnailImageHash || null,
       creativeId: campaign.meta?.creativeId || campaign.meta?.metaCreativeId || null,
       adId: campaign.meta?.adId || campaign.meta?.metaAdId || null,
       publishStatus: campaign.meta?.publishStatus || "",

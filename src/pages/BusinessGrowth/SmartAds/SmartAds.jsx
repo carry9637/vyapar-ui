@@ -325,6 +325,7 @@ function campaignWithPublishResult(campaign, publish, status, message = "") {
       adSetId: ids.metaAdSetId || null,
       imageHash: ids.metaImageHash || null,
       videoId: ids.metaVideoId || null,
+      thumbnailImageHash: ids.metaVideoThumbnailImageHash || null,
       creativeId: ids.metaCreativeId || null,
       adId: ids.metaAdId || null,
       publishStatus: publish?.safeStatus || "PAUSED",
