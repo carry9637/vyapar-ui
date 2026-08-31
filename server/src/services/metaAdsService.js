@@ -1,5 +1,6 @@
 import { Buffer } from "node:buffer";
 import { getMetaOAuthConfig } from "../config/metaOAuth.js";
+import { buildMetaReadiness } from "./metaConnectionStore.js";
 import { graphGet, graphPost, normalizeMetaError } from "./metaOAuthService.js";
 
 const SAFE_STATUS = "PAUSED";
@@ -20,17 +21,58 @@ function createPublishError(message, code = "META_PUBLISH_ERROR", publishResult 
 
 function safeMetaError(error, fallback, step = "") {
   const normalized = normalizeMetaError(error, fallback);
+  const classified = classifyMetaPublishError(normalized);
   return {
     step,
-    message: normalized.message,
+    message: classified?.message || normalized.message,
+    originalMessage: classified ? normalized.message : "",
     type: normalized.type,
     code: normalized.code,
     subcode: normalized.subcode,
-    userTitle: normalized.userTitle,
-    userMessage: normalized.userMessage,
+    userTitle: classified?.title || normalized.userTitle,
+    userMessage: classified?.description || normalized.userMessage,
+    category: classified?.category || "",
     fbtraceId: normalized.fbtraceId,
     httpStatus: normalized.httpStatus,
   };
+}
+
+function classifyMetaPublishError(error = {}) {
+  const code = String(error.code || "");
+  const subcode = String(error.subcode || "");
+  const text = [error.type, error.userTitle, error.userMessage, error.message].filter(Boolean).join(" ").toLowerCase();
+
+  if (code === "100" && subcode === "1359188") {
+    return {
+      category: "billing",
+      title: "Payment method required",
+      message: "Payment method required",
+      description: "Add a valid payment method to the selected Meta Ad Account before the ad can run.",
+    };
+  }
+
+  if (code === "190") {
+    return {
+      category: "token",
+      title: "Reconnect Meta",
+      message: "Meta connection expired or was revoked.",
+      description: "Reconnect Meta, grant the requested permissions, then try publishing again.",
+    };
+  }
+
+  const permissionCodes = new Set(["10", "200", "294", "299"]);
+  const permissionText = /\b(permission|permissions|access|authorized|authorised|authorization|insufficient|advertise|admin|role|revoked)\b/.test(text);
+
+  if (permissionCodes.has(code) || permissionText) {
+    return {
+      category: "permission",
+      title: "Advertising access required",
+      message: "You don't have permission to advertise with this Facebook Page or Ad Account.",
+      description: "Ask the business admin to give your Facebook account the required advertising access, then reconnect Meta.",
+    };
+  }
+
+  return null;
 }
 
 function adAccountPath(adAccountId = "") {
@@ -581,6 +623,10 @@ export async function publishMetaAdCampaign({ accessToken, connection, campaign 
   };
 
   if (!accessToken) throw createPublishError("Meta is not connected. Reconnect before publishing.", "META_NOT_CONNECTED");
+  const readiness = buildMetaReadiness(connection);
+  if (!readiness.readyToPublish) {
+    throw createPublishError(readiness.blockingReason || "Complete Meta setup before publishing Smart Ads.", readiness.blockingCode || "META_SETUP_REQUIRED");
+  }
   if (!selectedPage?.id) throw createPublishError("Select a real Facebook Page before publishing.", "META_PAGE_REQUIRED");
   if (!selectedAdAccount?.id) throw createPublishError("Select a real Meta Ad Account before publishing.", "META_AD_ACCOUNT_REQUIRED");
   if (!destinationUrl) throw createPublishError("Enter a real public HTTP/HTTPS website URL before publishing. WhatsApp destination publishing is not enabled yet.", "META_DESTINATION_REQUIRED");

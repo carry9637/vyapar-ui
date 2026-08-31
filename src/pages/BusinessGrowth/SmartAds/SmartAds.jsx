@@ -150,6 +150,67 @@ function emptyMetaSelection() {
   };
 }
 
+function emptyMetaReadiness() {
+  return {
+    connected: false,
+    hasBusiness: false,
+    hasPage: false,
+    hasAdAccount: false,
+    hasSelectedPage: false,
+    hasSelectedAdAccount: false,
+    hasRequiredAccess: "unknown",
+    instagramRequired: false,
+    hasInstagram: false,
+    readyToPublish: false,
+    blockingReason: "Connect Meta before publishing Smart Ads.",
+    blockingCode: "META_NOT_CONNECTED",
+    missingPermissions: [],
+  };
+}
+
+function resolveMetaReadiness(status = {}, assets = emptyMetaAssets(), selection = emptyMetaSelection()) {
+  if (status.readiness) return status.readiness;
+  const connected = Boolean(status.connected);
+  const hasPage = Boolean(assets.pages?.length);
+  const hasAdAccount = Boolean(assets.adAccounts?.length);
+  const hasSelectedPage = Boolean(selection.pageId && assets.pages?.some((page) => page.id === selection.pageId));
+  const hasSelectedAdAccount = Boolean(selection.adAccountId && assets.adAccounts?.some((account) => account.id === selection.adAccountId));
+  let blockingReason = "";
+  let blockingCode = "";
+
+  if (!connected) {
+    blockingReason = "Connect Meta before publishing Smart Ads.";
+    blockingCode = "META_NOT_CONNECTED";
+  } else if (!hasPage) {
+    blockingReason = "No Facebook Page found. Smart Ads requires a Facebook Page to publish ads.";
+    blockingCode = "META_PAGE_REQUIRED";
+  } else if (!hasAdAccount) {
+    blockingReason = "No Ad Account found. A Meta Ad Account is required to publish ads.";
+    blockingCode = "META_AD_ACCOUNT_REQUIRED";
+  } else if (!hasSelectedPage) {
+    blockingReason = "Select a Facebook Page before publishing Smart Ads.";
+    blockingCode = "META_PAGE_SELECTION_REQUIRED";
+  } else if (!hasSelectedAdAccount) {
+    blockingReason = "Select a Meta Ad Account before publishing Smart Ads.";
+    blockingCode = "META_AD_ACCOUNT_SELECTION_REQUIRED";
+  }
+
+  return {
+    ...emptyMetaReadiness(),
+    connected,
+    hasBusiness: Boolean(assets.businesses?.length),
+    hasPage,
+    hasAdAccount,
+    hasSelectedPage,
+    hasSelectedAdAccount,
+    hasRequiredAccess: hasSelectedPage && hasSelectedAdAccount ? "unknown" : false,
+    hasInstagram: Boolean(selection.instagramAccountId),
+    readyToPublish: connected && hasSelectedPage && hasSelectedAdAccount,
+    blockingReason,
+    blockingCode,
+  };
+}
+
 function readMetaCallbackNotice() {
   if (typeof window === "undefined") return { toast: "", error: "" };
   const params = new URLSearchParams(window.location.search);
@@ -450,7 +511,9 @@ function formatMetaPublishError(error) {
   const details = error?.payload?.error || error?.payload?.publish?.error;
   if (!details) return error?.message || "Unable to publish Meta campaign.";
 
-  const lines = [`Meta publish failed${details.step ? ` at ${details.step}` : ""}`, details.userMessage || details.message].filter(Boolean);
+  const primary = details.userTitle || details.message;
+  const secondary = details.userMessage && details.userMessage !== primary ? details.userMessage : "";
+  const lines = [`Meta publish failed${details.step ? ` at ${details.step}` : ""}`, primary, secondary].filter(Boolean);
   const codes = [
     details.code ? `Code: ${details.code}` : "",
     details.subcode ? `Subcode: ${details.subcode}` : "",
@@ -489,14 +552,14 @@ function StatusBadge({ status }) {
   );
 }
 
-function MetaAssetSelect({ label, value, onChange, options, emptyLabel, getOptionLabel }) {
+function MetaAssetSelect({ label, value, onChange, options, emptyLabel, getOptionLabel, disabled = false }) {
   return (
     <label className="block">
       <span className="text-xs font-black uppercase tracking-wide text-slate-500">{label}</span>
       <select
         value={value || ""}
         onChange={(event) => onChange(event.target.value)}
-        disabled={!options.length}
+        disabled={disabled || !options.length}
         className="mt-2 h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-800 outline-none focus:border-blue-500 disabled:bg-slate-50 disabled:text-slate-400"
       >
         <option value="">{emptyLabel}</option>
@@ -507,6 +570,28 @@ function MetaAssetSelect({ label, value, onChange, options, emptyLabel, getOptio
         ))}
       </select>
     </label>
+  );
+}
+
+function MetaRequirementRow({ ok, optional = false, label, helper }) {
+  const Icon = ok ? FiCheck : optional ? FiClock : FiX;
+  return (
+    <div className="flex items-start gap-2 text-xs font-bold leading-5">
+      <span
+        className={cx(
+          "mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-full",
+          ok && "bg-emerald-50 text-emerald-600",
+          !ok && optional && "bg-slate-100 text-slate-400",
+          !ok && !optional && "bg-rose-50 text-rose-600",
+        )}
+      >
+        <Icon className="text-[11px]" />
+      </span>
+      <span>
+        <span className={ok ? "text-slate-800" : optional ? "text-slate-500" : "text-rose-700"}>{label}</span>
+        {helper && <span className="block font-semibold text-slate-500">{helper}</span>}
+      </span>
+    </div>
   );
 }
 
@@ -522,6 +607,7 @@ function MetaConnectionCard({
   loading,
   error,
   onConnect,
+  onReconnect,
   onRefresh,
   onDisconnect,
   onSelectionChange,
@@ -529,6 +615,7 @@ function MetaConnectionCard({
 }) {
   const connected = Boolean(status.connected);
   const configured = status.configured !== false;
+  const readiness = resolveMetaReadiness(status, assets, selection);
   const selectedPage = assets.pages.find((page) => page.id === selection.pageId);
   const instagramOptions = selectedPage?.instagramAccountId
     ? assets.instagramAccounts.filter((account) => account.id === selectedPage.instagramAccountId)
@@ -536,6 +623,12 @@ function MetaConnectionCard({
   const pagesWarning = findAssetWarning(assets, "page");
   const adAccountsWarning = findAssetWarning(assets, "ad account");
   const connectedStatusLabel = status.lastError ? "Token expired / Reconnect required" : "Connected";
+  const hasKnownAccess = readiness.hasRequiredAccess === true;
+  const accessUnknown = readiness.hasRequiredAccess === "unknown";
+  const saveDisabled = loading || !readiness.hasPage || !readiness.hasAdAccount || !selection.pageId || !selection.adAccountId || readiness.hasRequiredAccess === false;
+  const showNoPage = connected && !readiness.hasPage;
+  const showNoAdAccount = connected && readiness.hasPage && !readiness.hasAdAccount;
+  const showAccessBlock = connected && readiness.hasRequiredAccess === false && !showNoPage && !showNoAdAccount;
 
   return (
     <Card className="p-5 shadow-sm">
@@ -555,6 +648,28 @@ function MetaConnectionCard({
           {connected && status.user?.name && <p className="mt-1 truncate text-xs font-bold text-slate-500">Connected as {status.user.name}</p>}
         </div>
       </div>
+
+      {connected && (
+        <div className={cx("mt-4 rounded-lg border p-3", readiness.readyToPublish ? "border-emerald-100 bg-emerald-50" : "border-amber-100 bg-amber-50")}>
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-xs font-black uppercase tracking-wide text-slate-500">{readiness.readyToPublish ? "Ready to publish" : "Setup required"}</p>
+            <span className={cx("rounded-full px-2.5 py-1 text-[11px] font-black", readiness.readyToPublish ? "bg-white text-emerald-700" : "bg-white text-amber-700")}>
+              {readiness.readyToPublish ? "Ready" : "Needs setup"}
+            </span>
+          </div>
+          <div className="mt-3 space-y-2">
+            <MetaRequirementRow ok={readiness.hasPage && readiness.hasSelectedPage} label="Facebook Page" helper={readiness.hasPage ? "Required for ad identity" : "Required but not found"} />
+            <MetaRequirementRow ok={readiness.hasAdAccount && readiness.hasSelectedAdAccount} label="Ad Account" helper={readiness.hasAdAccount ? "Required for campaign publishing" : "Required but not found"} />
+            <MetaRequirementRow ok={Boolean(selection.instagramAccountId)} optional label="Instagram - Optional" helper={selection.instagramAccountId ? "Selected for Instagram placement identity" : "Not required for this phase"} />
+            <MetaRequirementRow
+              ok={hasKnownAccess}
+              optional={accessUnknown}
+              label="Advertising access"
+              helper={hasKnownAccess ? "Required permissions are available" : accessUnknown ? "Confirmed during publishing" : "Admin/permission action required"}
+            />
+          </div>
+        </div>
+      )}
 
       {error && (
         <div className="mt-4 flex gap-2 rounded-lg border border-rose-100 bg-rose-50 p-3 text-xs font-bold leading-5 text-rose-700">
@@ -594,11 +709,12 @@ function MetaConnectionCard({
               getOptionLabel={(page) => [page.name, page.category].filter(Boolean).join(" - ")}
             />
             {!assets.pages.length && (
-              <p className={cx("rounded-lg p-3 text-xs font-bold leading-5", pagesWarning ? "bg-rose-50 text-rose-700" : "bg-slate-50 text-slate-500")}>
-                {pagesWarning
-                  ? "Failed to fetch Facebook Pages. Refresh Meta or check Page permissions in Meta Business settings."
-                  : "No Facebook Pages are currently accessible to this Meta account/business. Create or assign a Page in Meta Business settings."}
-              </p>
+              <div className={cx("rounded-lg p-3 text-xs font-bold leading-5", pagesWarning ? "bg-rose-50 text-rose-700" : "bg-slate-50 text-slate-600")}>
+                <p className="font-black text-slate-900">No Facebook Page found</p>
+                <p className="mt-1">
+                  Smart Ads requires a Facebook Page to publish ads. Create a Page or ask your business admin to give you access, then refresh your Meta connection.
+                </p>
+              </div>
             )}
             <MetaAssetSelect
               label="Instagram Account"
@@ -622,13 +738,26 @@ function MetaConnectionCard({
               getOptionLabel={(account) => [account.name, account.currency].filter(Boolean).join(" - ")}
             />
             {!assets.adAccounts.length && (
-              <p className={cx("rounded-lg p-3 text-xs font-bold leading-5", adAccountsWarning ? "bg-rose-50 text-rose-700" : "bg-amber-50 text-amber-700")}>
-                {adAccountsWarning
-                  ? "Failed to fetch Ad Accounts. Refresh Meta or check Ad Account permissions in Meta Business settings."
-                  : "No Ad Account found for this connected account/business. Create or assign an Ad Account in Meta Business settings."}
-              </p>
+              <div className={cx("rounded-lg p-3 text-xs font-bold leading-5", adAccountsWarning ? "bg-rose-50 text-rose-700" : "bg-amber-50 text-amber-700")}>
+                <p className="font-black text-slate-900">No Ad Account found</p>
+                <p className="mt-1">A Meta Ad Account is required to publish ads. Create/connect an Ad Account or ask your business admin for advertising access.</p>
+              </div>
             )}
           </div>
+
+          {showAccessBlock && (
+            <div className="rounded-lg border border-rose-100 bg-rose-50 p-3 text-xs font-bold leading-5 text-rose-700">
+              <p className="font-black">You don't have permission to advertise with this Facebook Page or Ad Account.</p>
+              <p className="mt-1">Ask the business admin to give your Facebook account the required advertising access, then reconnect Meta.</p>
+            </div>
+          )}
+
+          {readiness.blockingReason && !showNoPage && !showNoAdAccount && !showAccessBlock && (
+            <div className="rounded-lg bg-slate-50 p-3 text-xs font-bold leading-5 text-slate-600">
+              <p>{readiness.blockingReason}</p>
+              {readiness.missingPermissions?.length ? <p className="mt-1 text-slate-500">Missing: {readiness.missingPermissions.join(", ")}</p> : null}
+            </div>
+          )}
 
           {assets.warnings?.length > 0 && (
             <div className="rounded-lg bg-slate-50 p-3 text-xs font-bold leading-5 text-slate-500">
@@ -637,13 +766,17 @@ function MetaConnectionCard({
           )}
 
           <div className="flex flex-wrap gap-2">
-            <Button onClick={onSaveSelection} disabled={loading} className="bg-blue-600 px-4 text-white shadow-sm hover:bg-blue-700 disabled:bg-slate-300">
+            <Button onClick={onSaveSelection} disabled={saveDisabled} className="bg-blue-600 px-4 text-white shadow-sm hover:bg-blue-700 disabled:bg-slate-300">
               <FiSave />
               Save Selection
             </Button>
             <Button onClick={onRefresh} disabled={loading} className="border border-slate-200 bg-white px-4 text-slate-700 shadow-sm hover:bg-slate-50 disabled:text-slate-300">
               <FiRefreshCw />
               Refresh
+            </Button>
+            <Button onClick={onReconnect} disabled={loading || !configured} className="border border-slate-200 bg-white px-4 text-slate-700 shadow-sm hover:bg-slate-50 disabled:text-slate-300">
+              <FiZap />
+              Reconnect
             </Button>
             <Button onClick={onDisconnect} disabled={loading} className="border border-rose-100 bg-white px-4 text-rose-600 shadow-sm hover:bg-rose-50 disabled:text-slate-300">
               <FiX />
@@ -757,6 +890,7 @@ function SmartAds() {
     user: null,
     permissions: [],
     selection: emptyMetaSelection(),
+    readiness: emptyMetaReadiness(),
     lastError: callbackNotice.error,
   });
   const [metaAssets, setMetaAssets] = useState(() => emptyMetaAssets());
@@ -773,6 +907,7 @@ function SmartAds() {
   const itemImageOptions = inventoryItems.filter((item) => itemImage(item));
   const estimatedBudget = Math.max(Number(form.dailyBudget) || 0, 0) * Math.max(Number(form.durationDays) || 0, 0);
   const endDate = addDays(form.startDate, form.durationDays);
+  const metaReadiness = useMemo(() => resolveMetaReadiness(metaStatus, metaAssets, metaSelection), [metaStatus, metaAssets, metaSelection]);
 
   const metrics = useMemo(
     () =>
@@ -1011,16 +1146,8 @@ function SmartAds() {
       setError(message);
       return;
     }
-    if (!metaStatus.connected) {
-      setError("Reconnect Meta before publishing this campaign.");
-      return;
-    }
-    if (!metaSelection.pageId) {
-      setError("Select a Facebook Page before publishing this campaign.");
-      return;
-    }
-    if (!metaSelection.adAccountId) {
-      setError("Select an Ad Account before publishing this campaign.");
+    if (!metaReadiness.readyToPublish) {
+      setError(metaReadiness.blockingReason || "Complete Meta setup before publishing this campaign.");
       return;
     }
     if (!hasPublishableDestination(form.website)) {
@@ -1867,6 +1994,7 @@ function SmartAds() {
               loading={metaLoading || metaStatus.loading}
               error={metaError}
               onConnect={handleConnectMeta}
+              onReconnect={handleConnectMeta}
               onRefresh={refreshMetaConnection}
               onDisconnect={handleDisconnectMeta}
               onSelectionChange={handleMetaSelectionChange}

@@ -35,6 +35,7 @@ router.post("/publish", async (req, res) => {
       message: normalized.message,
       error: error.publishResult?.error || normalized,
       publish: error.publishResult || null,
+      ...getMetaPublicConnection(),
     });
   }
 });

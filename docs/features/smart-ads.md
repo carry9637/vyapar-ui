@@ -29,12 +29,15 @@ Smart Ads Dashboard -> Connect Meta -> Meta OAuth -> Fetch Business/Page/Instagr
 - Express Meta OAuth is implemented with backend-only App Secret use, OAuth state validation, code exchange, long-lived token exchange, `/me`, and permissions fetch.
 - Asset discovery fetches Business Portfolios, Facebook Pages, Ad Accounts, and optional linked Instagram professional accounts.
 - Selected Business/Page/Instagram/Ad Account are stored in temporary server memory for this phase.
+- Smart Ads readiness is normalized on the backend: Facebook Page and Ad Account are required, Instagram is optional, and missing OAuth/asset access blocks publishing.
+- The Integrations card shows Connected vs Setup required, requirement rows, no-Page/no-Ad-Account states, missing permissions, and Refresh/Reconnect actions.
 - Meta tokens are stored backend-only in memory; the frontend receives only public-safe connection and asset data.
 - Production Vercel frontend and Render backend are supported through environment-driven URLs and CORS configuration.
 
 ## Real Publishing Flow
 
 - `POST /api/meta/ads/publish` uses the selected real Facebook Page and real Ad Account.
+- Publishing is guarded by readiness checks before any real Meta object is created.
 - Campaign is created in `PAUSED` state with `special_ad_categories: []` and `is_adset_budget_sharing_enabled: false`.
 - Daily budget remains on the Ad Set, which is also created in `PAUSED` state.
 - Image upload uses the real Meta Ad Images endpoint and returns a real image hash.
@@ -46,6 +49,7 @@ Smart Ads Dashboard -> Connect Meta -> Meta OAuth -> Fetch Business/Page/Instagr
 - Creative is created with Page identity, optional Instagram actor, destination URL, text, and CTA.
 - Final Ad is created in `PAUSED` state; no fake IDs or demo success fallback are used.
 - Failed Meta steps return safe error details including step, code, subcode, user message, and fbtrace ID where provided.
+- Permission/access failures are shown as advertising-access issues; Meta payment error `100 / 1359188` stays separate as “Payment method required.”
 - Video creative diagnostics log only safe details such as video ID, thumbnail source, thumbnail host, and outgoing payload keys; tokens and signed URL query strings are not logged.
 
 ## Live Test Status
@@ -84,7 +88,7 @@ Smart Ads Dashboard -> Connect Meta -> Meta OAuth -> Fetch Business/Page/Instagr
 - Add real Meta Insights sync, campaign status refresh, retry/cleanup for partial publishes, and audit logs.
 - Add production-grade location/interest targeting search using Meta targeting IDs.
 - Complete final live image and video publish verification with a payment-enabled production Ad Account; confirm Meta accepts generated video thumbnail image hashes end-to-end.
-- Confirm required Meta permissions/access tiers for external client use after App Review.
+- Confirm required Meta permissions/access tiers and business asset roles for external client use after App Review.
 - Add deletion/revocation tooling backed by the future database.
 
 ## Security Status
