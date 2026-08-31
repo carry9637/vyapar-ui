@@ -10,6 +10,9 @@ import marketingStudioRoutes from "./routes/marketingStudio.js";
 import metaAdsRoutes from "./routes/metaAds.js";
 import metaAuthRoutes from "./routes/metaAuth.js";
 import metaBusinessRoutes from "./routes/metaBusiness.js";
+import whatsappAuthRoutes from "./routes/whatsappAuth.js";
+import whatsappBusinessRoutes from "./routes/whatsappBusiness.js";
+import whatsappWebhookRoutes from "./routes/whatsappWebhook.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.resolve(__dirname, "../.env"), quiet: true });
@@ -29,9 +32,12 @@ app.use("/api/marketing-studio", marketingStudioRoutes);
 app.use(express.json({ limit: "35mb" }));
 app.use("/api/auth", googleAuthRoutes);
 app.use("/api/auth", metaAuthRoutes);
+app.use("/api/auth", whatsappAuthRoutes);
 app.use("/api/google-business", googleBusinessRoutes);
 app.use("/api/meta-business", metaBusinessRoutes);
 app.use("/api/meta/ads", metaAdsRoutes);
+app.use("/api/whatsapp-business", whatsappBusinessRoutes);
+app.use("/api/whatsapp", whatsappWebhookRoutes);
 
 app.get("/api/health", (_req, res) => {
   res.json({

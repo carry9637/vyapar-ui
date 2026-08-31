@@ -1,15 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  FiAlertCircle,
   FiCheck,
+  FiCheckCircle,
   FiDownload,
   FiImage,
   FiMessageCircle,
   FiPhone,
+  FiRefreshCw,
   FiSearch,
+  FiSend,
   FiShare2,
+  FiShield,
   FiUpload,
   FiUser,
   FiX,
+  FiZap,
 } from "react-icons/fi";
 import {
   whatsappMarketingCategories,
@@ -17,6 +23,14 @@ import {
   whatsappMarketingSubcategories,
   whatsappMarketingTemplates,
 } from "../../constants/whatsappMarketingData";
+import {
+  disconnectWhatsAppBusiness,
+  getWhatsAppAssets,
+  getWhatsAppConnectionStatus,
+  saveWhatsAppSelection,
+  sendWhatsAppTestMessage,
+  startWhatsAppConnection,
+} from "../../services/whatsappBusinessService";
 
 const EXPORT_WIDTH = 1080;
 const EXPORT_PADDING = 54;
@@ -35,6 +49,126 @@ const shareBackgroundPresets = [
 ];
 
 const backgroundSwatches = ["#ffffff", "#f4f0ff", "#eff6ff", "#fff7ed", "#f8fafc", "#0f172a"];
+
+function emptyWhatsAppAssets() {
+  return {
+    businesses: [],
+    wabas: [],
+    phoneNumbers: [],
+    templates: [],
+    warnings: [],
+  };
+}
+
+function emptyWhatsAppSelection() {
+  return {
+    businessId: "",
+    wabaId: "",
+    phoneNumberId: "",
+    templateId: "",
+  };
+}
+
+function emptyWhatsAppReadiness() {
+  return {
+    connected: false,
+    hasBusiness: false,
+    hasWaba: false,
+    hasSelectedWaba: false,
+    hasPhoneNumber: false,
+    hasSelectedPhoneNumber: false,
+    hasApprovedTemplate: false,
+    hasSelectedApprovedTemplate: false,
+    requiredPermissionsAvailable: false,
+    readyToSend: false,
+    blockingReason: "Connect WhatsApp Business before sending a test template message.",
+    blockingCode: "WHATSAPP_NOT_CONNECTED",
+    missingPermissions: [],
+  };
+}
+
+function resolveWhatsAppReadiness(status = {}, assets = emptyWhatsAppAssets(), selection = emptyWhatsAppSelection()) {
+  if (status.readiness) return status.readiness;
+  const connected = Boolean(status.connected);
+  const hasWaba = Boolean(assets.wabas?.length);
+  const hasSelectedWaba = Boolean(selection.wabaId && assets.wabas?.some((waba) => waba.id === selection.wabaId));
+  const hasPhoneNumber = Boolean(assets.phoneNumbers?.length);
+  const hasSelectedPhoneNumber = Boolean(selection.phoneNumberId && assets.phoneNumbers?.some((phone) => phone.id === selection.phoneNumberId));
+  const hasApprovedTemplate = Boolean(assets.templates?.some((template) => template.status === "APPROVED"));
+  const hasSelectedApprovedTemplate = Boolean(assets.templates?.some((template) => template.id === selection.templateId && template.status === "APPROVED"));
+  let blockingReason = "";
+  let blockingCode = "";
+
+  if (!connected) {
+    blockingReason = "Connect WhatsApp Business before sending a test template message.";
+    blockingCode = "WHATSAPP_NOT_CONNECTED";
+  } else if (!hasWaba) {
+    blockingReason = "No WhatsApp Business Account found. Complete WhatsApp Business setup in Meta Business Manager.";
+    blockingCode = "NO_WABA";
+  } else if (!hasSelectedWaba) {
+    blockingReason = "Select a WhatsApp Business Account.";
+    blockingCode = "NO_WABA";
+  } else if (!hasPhoneNumber) {
+    blockingReason = "No registered WhatsApp business phone number found for this account.";
+    blockingCode = "NO_PHONE_NUMBER";
+  } else if (!hasSelectedPhoneNumber) {
+    blockingReason = "Select a WhatsApp business phone number.";
+    blockingCode = "NO_PHONE_NUMBER";
+  } else if (!hasApprovedTemplate || !hasSelectedApprovedTemplate) {
+    blockingReason = "Select an approved WhatsApp message template.";
+    blockingCode = "TEMPLATE_NOT_APPROVED";
+  }
+
+  return {
+    ...emptyWhatsAppReadiness(),
+    connected,
+    hasBusiness: Boolean(assets.businesses?.length),
+    hasWaba,
+    hasSelectedWaba,
+    hasPhoneNumber,
+    hasSelectedPhoneNumber,
+    hasApprovedTemplate,
+    hasSelectedApprovedTemplate,
+    requiredPermissionsAvailable: true,
+    readyToSend: connected && hasSelectedWaba && hasSelectedPhoneNumber && hasSelectedApprovedTemplate,
+    blockingReason,
+    blockingCode,
+  };
+}
+
+function readWhatsAppCallbackNotice() {
+  if (typeof window === "undefined") return { toast: "", error: "" };
+  const params = new URLSearchParams(window.location.search);
+  const whatsappStatus = params.get("whatsapp");
+  const message = params.get("message") || "";
+
+  if (whatsappStatus === "connected") return { toast: "WhatsApp Business connected. Select WABA, phone number, and approved template.", error: "" };
+  if (whatsappStatus === "error") return { toast: "", error: message || "WhatsApp Business connection failed." };
+  return { toast: "", error: "" };
+}
+
+function cleanWhatsAppCallbackNotice() {
+  if (typeof window === "undefined") return;
+  const url = new URL(window.location.href);
+  if (!url.searchParams.has("whatsapp")) return;
+  url.searchParams.delete("whatsapp");
+  url.searchParams.delete("message");
+  window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+}
+
+function extractTemplateVariables(template = {}) {
+  const variables = [];
+  (template.components || []).forEach((component) => {
+    const type = String(component.type || "").toUpperCase();
+    const text = String(component.text || "");
+    if (!["HEADER", "BODY"].includes(type) || !text) return;
+    const matches = text.match(/\{\{\d+\}\}/g) || [];
+    [...new Set(matches.map((match) => Number(match.replace(/[{}]/g, ""))).filter(Boolean))].forEach((index) => {
+      variables.push({ componentType: type.toLowerCase(), index, key: `${type.toLowerCase()}:${index}` });
+    });
+  });
+  return variables.sort((a, b) => a.componentType.localeCompare(b.componentType) || a.index - b.index);
+}
 
 function hexToRgb(hex = "#ffffff") {
   const cleanHex = hex.replace("#", "");
@@ -390,6 +524,255 @@ function BackgroundPanel({ background, setBackground, activeTab, setActiveTab })
   );
 }
 
+function WhatsAppAssetSelect({ label, value, options, emptyLabel, onChange, getOptionLabel, disabled = false }) {
+  return (
+    <label className="block">
+      <span className="mb-2 block text-xs font-black uppercase tracking-wide text-slate-500">{label}</span>
+      <select
+        value={value || ""}
+        onChange={(event) => onChange(event.target.value)}
+        disabled={disabled || !options.length}
+        className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-800 outline-none focus:border-[#36A175] disabled:bg-slate-50 disabled:text-slate-400"
+      >
+        <option value="">{emptyLabel}</option>
+        {options.map((option) => (
+          <option key={option.id} value={option.id}>
+            {getOptionLabel(option)}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function RequirementRow({ ok, label, helper }) {
+  return (
+    <div className="flex items-start gap-2 text-xs font-bold leading-5">
+      <span className={`mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-full ${ok ? "bg-emerald-50 text-emerald-600" : "bg-amber-50 text-amber-600"}`}>
+        {ok ? <FiCheck className="h-3 w-3" /> : <FiAlertCircle className="h-3 w-3" />}
+      </span>
+      <span>
+        <span className={ok ? "text-slate-800" : "text-amber-700"}>{label}</span>
+        {helper && <span className="block font-semibold text-slate-500">{helper}</span>}
+      </span>
+    </div>
+  );
+}
+
+function templateStatusClass(status) {
+  if (status === "APPROVED") return "bg-emerald-50 text-emerald-700";
+  if (status === "REJECTED") return "bg-rose-50 text-rose-700";
+  if (status === "PAUSED" || status === "DISABLED") return "bg-slate-100 text-slate-600";
+  return "bg-amber-50 text-amber-700";
+}
+
+function WhatsAppBusinessPanel({
+  status,
+  assets,
+  selection,
+  loading,
+  error,
+  sendState,
+  onConnect,
+  onRefresh,
+  onDisconnect,
+  onSelectionChange,
+  onSaveSelection,
+  onSendTest,
+  testForm,
+  setTestForm,
+}) {
+  const configured = status.configured !== false;
+  const connected = Boolean(status.connected);
+  const readiness = resolveWhatsAppReadiness(status, assets, selection);
+  const approvedTemplates = assets.templates.filter((template) => template.status === "APPROVED");
+  const selectedTemplate = assets.templates.find((template) => template.id === selection.templateId);
+  const templateVariables = extractTemplateVariables(selectedTemplate);
+  const saveDisabled = loading || !selection.wabaId || !selection.phoneNumberId || !selection.templateId;
+  const sendDisabled = loading || sendState.loading || !readiness.readyToSend || !testForm.optInConfirmed;
+
+  return (
+    <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="grid gap-5 xl:grid-cols-[1fr_420px]">
+        <div>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <p className="text-xs font-black uppercase tracking-wide text-[#36A175]">WhatsApp Business Connection</p>
+              <h2 className="mt-1 text-lg font-black text-slate-950">Official Cloud API foundation</h2>
+              <p className="mt-1 text-sm font-semibold leading-6 text-slate-500">
+                Connect Meta, choose a real WABA and phone number, then send one approved-template test message.
+              </p>
+            </div>
+            <span className={`inline-flex rounded-full px-3 py-1 text-xs font-black ${readiness.readyToSend ? "bg-emerald-50 text-emerald-700" : connected ? "bg-amber-50 text-amber-700" : "bg-slate-100 text-slate-600"}`}>
+              {readiness.readyToSend ? "Ready for test" : connected ? "Setup required" : configured ? "Disconnected" : "Config missing"}
+            </span>
+          </div>
+
+          <div className="mt-4 grid gap-3 rounded-xl border border-slate-100 bg-slate-50 p-3 sm:grid-cols-2">
+            <RequirementRow ok={connected} label="Meta authorization" helper={connected && status.user?.name ? `Connected as ${status.user.name}` : "Required"} />
+            <RequirementRow ok={readiness.hasSelectedWaba} label="WhatsApp Business Account" helper={readiness.hasWaba ? "Select one accessible WABA" : "No WABA found"} />
+            <RequirementRow ok={readiness.hasSelectedPhoneNumber} label="Business phone number" helper={readiness.hasPhoneNumber ? "Registered phone_number_id required" : "No phone number found"} />
+            <RequirementRow ok={readiness.hasSelectedApprovedTemplate} label="Approved message template" helper={readiness.hasApprovedTemplate ? "Only approved templates can be sent" : "No approved template found"} />
+          </div>
+
+          {error && (
+            <div className="mt-4 flex gap-2 rounded-lg border border-rose-100 bg-rose-50 p-3 text-xs font-bold leading-5 text-rose-700">
+              <FiAlertCircle className="mt-0.5 shrink-0" />
+              <span>{error}</span>
+            </div>
+          )}
+
+          {!configured && (
+            <div className="mt-4 rounded-lg bg-amber-50 p-3 text-xs font-bold leading-5 text-amber-700">
+              Add WhatsApp OAuth env values on the Express backend before connecting.
+            </div>
+          )}
+
+          {connected && readiness.blockingReason && (
+            <div className="mt-4 rounded-lg bg-slate-50 p-3 text-xs font-bold leading-5 text-slate-600">
+              <p>{readiness.blockingReason}</p>
+              {readiness.missingPermissions?.length ? <p className="mt-1">Missing: {readiness.missingPermissions.join(", ")}</p> : null}
+            </div>
+          )}
+
+          <div className="mt-4 flex flex-wrap gap-2">
+            {!connected ? (
+              <button type="button" onClick={onConnect} disabled={loading || !configured} className="inline-flex h-10 items-center gap-2 rounded-lg bg-[#1A1F71] px-4 text-sm font-bold text-white hover:bg-[#14185a] disabled:bg-slate-300">
+                <FiZap />
+                Connect WhatsApp Business
+              </button>
+            ) : (
+              <>
+                <button type="button" onClick={onSaveSelection} disabled={saveDisabled} className="inline-flex h-10 items-center gap-2 rounded-lg bg-[#36A175] px-4 text-sm font-bold text-white hover:bg-[#2c8a64] disabled:bg-slate-300">
+                  <FiCheckCircle />
+                  Save Selection
+                </button>
+                <button type="button" onClick={onRefresh} disabled={loading} className="inline-flex h-10 items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 text-sm font-bold text-slate-700 hover:bg-slate-50 disabled:text-slate-300">
+                  <FiRefreshCw />
+                  Refresh
+                </button>
+                <button type="button" onClick={onConnect} disabled={loading || !configured} className="inline-flex h-10 items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 text-sm font-bold text-slate-700 hover:bg-slate-50 disabled:text-slate-300">
+                  <FiZap />
+                  Reconnect
+                </button>
+                <button type="button" onClick={onDisconnect} disabled={loading} className="inline-flex h-10 items-center gap-2 rounded-lg border border-rose-100 bg-white px-4 text-sm font-bold text-rose-600 hover:bg-rose-50 disabled:text-slate-300">
+                  <FiX />
+                  Disconnect
+                </button>
+              </>
+            )}
+          </div>
+
+          {connected && (
+            <div className="mt-5 grid gap-4 md:grid-cols-2">
+              <WhatsAppAssetSelect
+                label="Business Portfolio"
+                value={selection.businessId}
+                options={assets.businesses}
+                emptyLabel={assets.businesses.length ? "Select Business Portfolio" : "No Business Portfolio found"}
+                onChange={(value) => onSelectionChange({ businessId: value, wabaId: "", phoneNumberId: "", templateId: "" })}
+                getOptionLabel={(business) => [business.name, business.verificationStatus].filter(Boolean).join(" - ")}
+              />
+              <WhatsAppAssetSelect
+                label="WhatsApp Business Account"
+                value={selection.wabaId}
+                options={assets.wabas}
+                emptyLabel={assets.wabas.length ? "Select WhatsApp Business Account" : "No WABA found"}
+                onChange={(value) => onSelectionChange({ wabaId: value, phoneNumberId: "", templateId: "" })}
+                getOptionLabel={(waba) => [waba.name, waba.businessName].filter(Boolean).join(" - ")}
+              />
+              <WhatsAppAssetSelect
+                label="Business Phone Number"
+                value={selection.phoneNumberId}
+                options={assets.phoneNumbers}
+                emptyLabel={assets.phoneNumbers.length ? "Select phone number" : "No phone number found"}
+                onChange={(value) => onSelectionChange({ phoneNumberId: value })}
+                getOptionLabel={(phone) => [phone.displayPhoneNumber, phone.verifiedName, phone.qualityRating].filter(Boolean).join(" - ")}
+              />
+              <WhatsAppAssetSelect
+                label="Approved Message Template"
+                value={selection.templateId}
+                options={approvedTemplates}
+                emptyLabel={approvedTemplates.length ? "Select approved template" : "No approved template found"}
+                onChange={(value) => onSelectionChange({ templateId: value })}
+                getOptionLabel={(template) => `${template.name} (${template.language})`}
+              />
+            </div>
+          )}
+
+          {connected && assets.templates.length > 0 && (
+            <div className="mt-4 flex flex-wrap gap-2">
+              {assets.templates.slice(0, 8).map((template) => (
+                <span key={template.id} className={`rounded-full px-2.5 py-1 text-[11px] font-black ${templateStatusClass(template.status)}`}>
+                  {template.name} - {template.status}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+          <div className="flex items-center gap-2">
+            <span className="grid h-9 w-9 place-items-center rounded-lg bg-emerald-50 text-emerald-700">
+              <FiShield />
+            </span>
+            <div>
+              <p className="text-sm font-black text-slate-950">Single real test send</p>
+              <p className="text-xs font-semibold text-slate-500">Template message only. No bulk sending yet.</p>
+            </div>
+          </div>
+
+          <div className="mt-4 grid grid-cols-[96px_1fr] gap-3">
+            <label className="block">
+              <span className="mb-2 block text-xs font-black uppercase tracking-wide text-slate-500">Code</span>
+              <input value={testForm.countryCode} onChange={(event) => setTestForm((current) => ({ ...current, countryCode: event.target.value }))} className="h-10 w-full rounded-lg border border-slate-200 px-3 text-sm font-semibold outline-none focus:border-[#36A175]" placeholder="+91" />
+            </label>
+            <label className="block">
+              <span className="mb-2 block text-xs font-black uppercase tracking-wide text-slate-500">Test Recipient</span>
+              <input value={testForm.phoneNumber} onChange={(event) => setTestForm((current) => ({ ...current, phoneNumber: event.target.value }))} className="h-10 w-full rounded-lg border border-slate-200 px-3 text-sm font-semibold outline-none focus:border-[#36A175]" placeholder="9876543210" />
+            </label>
+          </div>
+
+          {templateVariables.length > 0 && (
+            <div className="mt-4 space-y-3">
+              {templateVariables.map((variable) => (
+                <label key={variable.key} className="block">
+                  <span className="mb-2 block text-xs font-black uppercase tracking-wide text-slate-500">
+                    {variable.componentType} variable {variable.index}
+                  </span>
+                  <input
+                    value={testForm.variables[variable.key] || ""}
+                    onChange={(event) => setTestForm((current) => ({ ...current, variables: { ...current.variables, [variable.key]: event.target.value } }))}
+                    className="h-10 w-full rounded-lg border border-slate-200 px-3 text-sm font-semibold outline-none focus:border-[#36A175]"
+                    placeholder={`Value for {{${variable.index}}}`}
+                  />
+                </label>
+              ))}
+            </div>
+          )}
+
+          <label className="mt-4 flex items-start gap-2 rounded-lg bg-white p-3 text-xs font-bold leading-5 text-slate-600">
+            <input type="checkbox" checked={testForm.optInConfirmed} onChange={(event) => setTestForm((current) => ({ ...current, optInConfirmed: event.target.checked }))} className="mt-0.5 h-4 w-4 accent-[#36A175]" />
+            I confirm this recipient opted in or is authorized for this test message.
+          </label>
+
+          <button type="button" onClick={onSendTest} disabled={sendDisabled} className="mt-4 inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-[#1A1F71] px-4 text-sm font-bold text-white hover:bg-[#14185a] disabled:bg-slate-300">
+            <FiSend />
+            {sendState.loading ? "Sending..." : "Send Test Message"}
+          </button>
+
+          {sendState.message && (
+            <div className={`mt-4 rounded-lg p-3 text-xs font-bold leading-5 ${sendState.success ? "bg-emerald-50 text-emerald-700" : "bg-rose-50 text-rose-700"}`}>
+              <p>{sendState.message}</p>
+              {sendState.messageId && <p className="mt-1 text-slate-600">Message ID: {sendState.messageId}</p>}
+            </div>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function PersonalizeModal({ template, onClose }) {
   const fileInputRef = useRef(null);
   const [values, setValues] = useState(whatsappMarketingDefaults);
@@ -642,10 +1025,28 @@ function TemplateCard({ template, onSelect }) {
 }
 
 function WhatsAppMarketing() {
+  const callbackNotice = readWhatsAppCallbackNotice();
   const [activeCategory, setActiveCategory] = useState("All");
   const [activeSubcategory, setActiveSubcategory] = useState("All");
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedTemplate, setSelectedTemplate] = useState(null);
+  const [whatsappStatus, setWhatsAppStatus] = useState({
+    loading: true,
+    configured: true,
+    connected: false,
+    user: null,
+    permissions: [],
+    selection: emptyWhatsAppSelection(),
+    readiness: emptyWhatsAppReadiness(),
+    lastError: callbackNotice.error,
+  });
+  const [whatsappAssets, setWhatsAppAssets] = useState(() => emptyWhatsAppAssets());
+  const [whatsappSelection, setWhatsAppSelection] = useState(() => emptyWhatsAppSelection());
+  const [whatsappLoading, setWhatsAppLoading] = useState(false);
+  const [whatsappError, setWhatsAppError] = useState(callbackNotice.error);
+  const [whatsappToast, setWhatsAppToast] = useState(callbackNotice.toast);
+  const [testForm, setTestForm] = useState({ countryCode: "+91", phoneNumber: "", optInConfirmed: false, variables: {} });
+  const [sendState, setSendState] = useState({ loading: false, success: false, message: "", messageId: "" });
 
   const filteredTemplates = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
@@ -656,6 +1057,210 @@ function WhatsAppMarketing() {
       return matchesCategory && matchesSubcategory && matchesQuery;
     });
   }, [activeCategory, activeSubcategory, searchQuery]);
+
+  useEffect(() => {
+    let active = true;
+    cleanWhatsAppCallbackNotice();
+
+    getWhatsAppConnectionStatus()
+      .then((status) => {
+        if (!active) return null;
+        setWhatsAppStatus({ ...status, loading: false });
+        setWhatsAppAssets(status.assets || emptyWhatsAppAssets());
+        setWhatsAppSelection(status.selection || emptyWhatsAppSelection());
+        setWhatsAppError((current) => current || status.lastError || "");
+        if (!status.connected) return null;
+        return getWhatsAppAssets({ businessId: status.selection?.businessId, wabaId: status.selection?.wabaId });
+      })
+      .then((assetsStatus) => {
+        if (!active || !assetsStatus) return;
+        setWhatsAppStatus({ ...assetsStatus, loading: false });
+        setWhatsAppAssets(assetsStatus.assets || emptyWhatsAppAssets());
+        setWhatsAppSelection(assetsStatus.selection || emptyWhatsAppSelection());
+      })
+      .catch((statusError) => {
+        if (!active) return;
+        if (statusError.payload) {
+          setWhatsAppStatus({ ...statusError.payload, loading: false });
+          setWhatsAppAssets(statusError.payload.assets || emptyWhatsAppAssets());
+          setWhatsAppSelection(statusError.payload.selection || emptyWhatsAppSelection());
+        } else {
+          setWhatsAppStatus((current) => ({ ...current, loading: false, connected: false }));
+        }
+        setWhatsAppError(statusError.message || "Unable to load WhatsApp Business connection status.");
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  async function refreshWhatsAppConnection(selection = whatsappSelection) {
+    setWhatsAppLoading(true);
+    setWhatsAppError("");
+
+    try {
+      const status = await getWhatsAppConnectionStatus();
+      let nextStatus = status;
+
+      if (status.connected) {
+        nextStatus = await getWhatsAppAssets({ businessId: selection.businessId || status.selection?.businessId, wabaId: selection.wabaId || status.selection?.wabaId });
+      }
+
+      setWhatsAppStatus({ ...nextStatus, loading: false });
+      setWhatsAppAssets(nextStatus.assets || emptyWhatsAppAssets());
+      setWhatsAppSelection(nextStatus.selection || emptyWhatsAppSelection());
+      return nextStatus;
+    } catch (requestError) {
+      if (requestError.payload) {
+        setWhatsAppStatus({ ...requestError.payload, loading: false });
+        setWhatsAppAssets(requestError.payload.assets || emptyWhatsAppAssets());
+        setWhatsAppSelection(requestError.payload.selection || emptyWhatsAppSelection());
+      }
+      setWhatsAppError(requestError.message || "Unable to refresh WhatsApp Business connection.");
+      return null;
+    } finally {
+      setWhatsAppLoading(false);
+    }
+  }
+
+  async function handleConnectWhatsApp() {
+    setWhatsAppLoading(true);
+    setWhatsAppError("");
+
+    try {
+      const status = await getWhatsAppConnectionStatus();
+      if (!status.configured) {
+        setWhatsAppStatus({ ...status, loading: false });
+        setWhatsAppAssets(status.assets || emptyWhatsAppAssets());
+        setWhatsAppSelection(status.selection || emptyWhatsAppSelection());
+        setWhatsAppError("WhatsApp Business environment configuration is missing on the backend.");
+        setWhatsAppLoading(false);
+        return;
+      }
+      startWhatsAppConnection();
+    } catch (requestError) {
+      setWhatsAppLoading(false);
+      setWhatsAppError(requestError.message || "Unable to start WhatsApp Business connection.");
+    }
+  }
+
+  async function handleWhatsAppSelectionChange(patch) {
+    const nextSelection = { ...whatsappSelection, ...patch };
+    setWhatsAppSelection(nextSelection);
+    setSendState({ loading: false, success: false, message: "", messageId: "" });
+    if (Object.prototype.hasOwnProperty.call(patch, "templateId")) setTestForm((current) => ({ ...current, variables: {} }));
+
+    if (Object.prototype.hasOwnProperty.call(patch, "businessId") || Object.prototype.hasOwnProperty.call(patch, "wabaId")) {
+      setWhatsAppLoading(true);
+      setWhatsAppError("");
+      try {
+        const refreshed = await getWhatsAppAssets({ businessId: nextSelection.businessId, wabaId: nextSelection.wabaId });
+        const scopedSelection = {
+          ...(refreshed.selection || emptyWhatsAppSelection()),
+          businessId: nextSelection.businessId,
+          wabaId: nextSelection.wabaId,
+          phoneNumberId: nextSelection.phoneNumberId,
+          templateId: nextSelection.templateId,
+        };
+        const saved = await saveWhatsAppSelection(scopedSelection);
+        setWhatsAppStatus({ ...saved, loading: false });
+        setWhatsAppAssets(saved.assets || refreshed.assets || emptyWhatsAppAssets());
+        setWhatsAppSelection(saved.selection || scopedSelection);
+      } catch (requestError) {
+        if (requestError.payload) {
+          setWhatsAppStatus({ ...requestError.payload, loading: false });
+          setWhatsAppAssets(requestError.payload.assets || emptyWhatsAppAssets());
+          setWhatsAppSelection(requestError.payload.selection || emptyWhatsAppSelection());
+        }
+        setWhatsAppError(requestError.message || "Unable to refresh WhatsApp assets.");
+      } finally {
+        setWhatsAppLoading(false);
+      }
+      return;
+    }
+
+    saveWhatsAppSelection(nextSelection)
+      .then((saved) => {
+        setWhatsAppStatus({ ...saved, loading: false });
+        setWhatsAppAssets(saved.assets || emptyWhatsAppAssets());
+        setWhatsAppSelection(saved.selection || emptyWhatsAppSelection());
+      })
+      .catch((requestError) => {
+        if (requestError.payload) {
+          setWhatsAppStatus({ ...requestError.payload, loading: false });
+          setWhatsAppAssets(requestError.payload.assets || emptyWhatsAppAssets());
+          setWhatsAppSelection(requestError.payload.selection || emptyWhatsAppSelection());
+        }
+        setWhatsAppError(requestError.message || "Unable to save WhatsApp Business selection.");
+      });
+  }
+
+  async function handleSaveWhatsAppSelection() {
+    setWhatsAppLoading(true);
+    setWhatsAppError("");
+
+    try {
+      const saved = await saveWhatsAppSelection(whatsappSelection);
+      setWhatsAppStatus({ ...saved, loading: false });
+      setWhatsAppAssets(saved.assets || emptyWhatsAppAssets());
+      setWhatsAppSelection(saved.selection || emptyWhatsAppSelection());
+      setWhatsAppToast("WhatsApp Business selection saved.");
+    } catch (requestError) {
+      setWhatsAppError(requestError.message || "Unable to save WhatsApp Business selection.");
+    } finally {
+      setWhatsAppLoading(false);
+    }
+  }
+
+  async function handleDisconnectWhatsApp() {
+    setWhatsAppLoading(true);
+    setWhatsAppError("");
+
+    try {
+      const disconnected = await disconnectWhatsAppBusiness();
+      setWhatsAppStatus({ ...disconnected, loading: false });
+      setWhatsAppAssets(disconnected.assets || emptyWhatsAppAssets());
+      setWhatsAppSelection(disconnected.selection || emptyWhatsAppSelection());
+      setSendState({ loading: false, success: false, message: "", messageId: "" });
+      setWhatsAppToast("WhatsApp Business disconnected.");
+    } catch (requestError) {
+      setWhatsAppError(requestError.message || "Unable to disconnect WhatsApp Business.");
+    } finally {
+      setWhatsAppLoading(false);
+    }
+  }
+
+  async function handleSendTestWhatsApp() {
+    setSendState({ loading: true, success: false, message: "", messageId: "" });
+    setWhatsAppError("");
+
+    try {
+      const response = await sendWhatsAppTestMessage({
+        countryCode: testForm.countryCode,
+        phoneNumber: testForm.phoneNumber,
+        optInConfirmed: testForm.optInConfirmed,
+        variables: testForm.variables,
+      });
+      setWhatsAppStatus({ ...response, loading: false });
+      setWhatsAppAssets(response.assets || emptyWhatsAppAssets());
+      setWhatsAppSelection(response.selection || emptyWhatsAppSelection());
+      setSendState({
+        loading: false,
+        success: true,
+        message: response.message || "Accepted by WhatsApp.",
+        messageId: response.result?.messageId || "",
+      });
+    } catch (requestError) {
+      const errorMessage = requestError.payload?.error?.userMessage || requestError.message || "WhatsApp test message failed.";
+      setSendState({ loading: false, success: false, message: errorMessage, messageId: "" });
+      if (requestError.payload) {
+        setWhatsAppStatus({ ...requestError.payload, loading: false });
+        setWhatsAppAssets(requestError.payload.assets || emptyWhatsAppAssets());
+        setWhatsAppSelection(requestError.payload.selection || emptyWhatsAppSelection());
+      }
+    }
+  }
 
   return (
     <div className="min-h-full bg-slate-50">
@@ -679,6 +1284,33 @@ function WhatsAppMarketing() {
       </header>
 
       <main className="space-y-5 p-5">
+        {whatsappToast && <div className="rounded-lg border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm font-black text-emerald-700">{whatsappToast}</div>}
+
+        <WhatsAppBusinessPanel
+          status={whatsappStatus}
+          assets={whatsappAssets}
+          selection={whatsappSelection}
+          loading={whatsappLoading || whatsappStatus.loading}
+          error={whatsappError}
+          sendState={sendState}
+          onConnect={handleConnectWhatsApp}
+          onRefresh={() => refreshWhatsAppConnection()}
+          onDisconnect={handleDisconnectWhatsApp}
+          onSelectionChange={handleWhatsAppSelectionChange}
+          onSaveSelection={handleSaveWhatsAppSelection}
+          onSendTest={handleSendTestWhatsApp}
+          testForm={testForm}
+          setTestForm={setTestForm}
+        />
+
+        <section>
+          <div>
+            <p className="text-sm font-bold text-[#36A175]">Marketing Creatives / Posters</p>
+            <h2 className="mt-1 text-xl font-black text-slate-950">Poster templates</h2>
+            <p className="mt-1 text-sm text-slate-500">These are share/download creatives, separate from approved WhatsApp message templates.</p>
+          </div>
+        </section>
+
         <section className="space-y-3">
           <div className="flex gap-2.5 overflow-x-auto pb-1">
             {whatsappMarketingCategories.map((category) => (

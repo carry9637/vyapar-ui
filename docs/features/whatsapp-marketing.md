@@ -1,29 +1,57 @@
 # WhatsApp Marketing
 
-Purpose: personalize existing poster templates and share or download the final customer-facing card.
+## Purpose
 
-Share Card Background Customization:
-- Compact Share & Download modal now uses business fields, preview, and background controls.
-- Background presets are generic for any business category.
-- Custom background color and pattern intensity update the preview live.
-- Dark backgrounds switch preview/export text to readable light colors.
-- Share and Download compose the selected background into the exported image.
+WhatsApp Marketing now has two clear areas: poster creatives and official WhatsApp Business test messaging.
+The poster gallery still supports local personalization, PNG download, browser share, and manual `wa.me` sharing.
+Phase 1 adds real Meta WhatsApp Business Platform foundation for one approved-template test send only.
 
-Layout note:
-- Share & Download spacing was tuned for a cleaner 3-column editor.
-- The center preview now scales inside its panel without its own scrollbar.
-- Preview scaling is UI-only and does not reduce download/share output quality.
+## Current Architecture
 
-Template Gallery UI:
-- Template cards now use uniform outer sizing and footer alignment.
-- A fixed thumbnail frame centers each poster with proportional `object-contain` fitting.
-- Filter spacing and the responsive grid were polished for desktop, tablet, and mobile.
+Frontend: `WhatsAppMarketing.jsx` -> `src/services/whatsappBusinessService.js`.
+Backend: `/api/auth/whatsapp`, `/api/whatsapp-business/*`, `/api/whatsapp/webhook`.
+Graph API calls stay backend-only; tokens and App Secret are never exposed to Vite.
 
-Files changed:
-- `src/pages/BusinessGrowth/WhatsAppMarketing.jsx`: gallery cards, filters, modal preview card, background controls, export rendering.
-- `src/constants/whatsappMarketingData.js`: neutral default business fields.
+## Files Created
 
-Manager summary:
-The poster template stays category-specific, but the surrounding share card is business-neutral.
-Owners can upload their own logo and enter business/contact details.
-The downloaded/shared image now matches the preview background choices.
+- `server/src/config/whatsappOAuth.js`: WhatsApp OAuth scopes/config.
+- `server/src/services/whatsappOAuthService.js`: WhatsApp OAuth state, callback token exchange, JSON Graph POST.
+- `server/src/services/whatsappConnectionStore.js`: temporary in-memory WhatsApp connection/readiness state.
+- `server/src/services/whatsappBusinessService.js`: real WABA, phone number, template fetch, and template test send.
+- `server/src/routes/whatsappAuth.js`: connect/callback/status/disconnect routes.
+- `server/src/routes/whatsappBusiness.js`: asset selection and one-recipient test send routes.
+- `server/src/routes/whatsappWebhook.js`: webhook verification and event receiver foundation.
+- `src/services/whatsappBusinessService.js`: frontend API client.
+
+## Files Changed
+
+- `src/pages/BusinessGrowth/WhatsAppMarketing.jsx`: added WhatsApp Business panel; poster UI preserved.
+- `server/src/index.js`: mounted WhatsApp auth/business/webhook routes.
+- `server/.env.example`: added WhatsApp OAuth/webhook env placeholders.
+
+## Real Flow
+
+Connect WhatsApp Business -> Meta OAuth -> fetch businesses/WABAs -> select WABA -> fetch phone numbers/templates -> select phone number and approved template -> confirm opted-in test recipient -> send one real template message through `/{phone-number-id}/messages`.
+
+## Environment / Meta Setup
+
+Required server env: `META_APP_ID`, `META_APP_SECRET`, `META_GRAPH_API_VERSION`, `WHATSAPP_REDIRECT_URI`, optional `WHATSAPP_LOGIN_CONFIG_ID`, `WHATSAPP_WEBHOOK_VERIFY_TOKEN`.
+Meta app must request `business_management`, `whatsapp_business_management`, and `whatsapp_business_messaging`.
+Configure callback URL `/api/auth/whatsapp/callback` and webhook URL `/api/whatsapp/webhook` in Meta Dashboard.
+
+## Security Notes
+
+Temporary connection/token storage is in server memory only and is not final production persistence.
+PostgreSQL later must store encrypted tokens, WABAs, phone numbers, contacts/consent, templates, campaigns, recipients, message IDs, webhook events, retries, and audit logs.
+Webhook delivery/read analytics are not processed yet.
+
+## Phase 2+
+
+Add SQL persistence, contact import/selection, consent/opt-out records, template creation/submission, queued bulk sending, retries, message status webhooks, analytics, and tenant isolation.
+
+## Manager Summary
+
+The existing poster creator remains intact.
+The new panel starts the real WhatsApp Cloud API path without fake WABAs or phone IDs.
+Phase 1 is ready for Meta configuration and one opted-in approved-template test message.
+Bulk marketing is intentionally not implemented yet.
