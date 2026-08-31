@@ -48,6 +48,7 @@ Temporary connection/token storage is in server memory only and is not final pro
 PostgreSQL later must store encrypted tokens, WABAs, phone numbers, contacts/consent, templates, campaigns, recipients, message IDs, webhook events, retries, and audit logs.
 Webhook delivery/read analytics are not processed yet.
 Backend test mode uses Meta dashboard test credentials only; it is not client onboarding.
+Status/save/send routes rebuild the test-mode connection from env, so reloads or server memory loss do not require OAuth.
 
 ## Phase 2+
 

@@ -157,6 +157,17 @@ function cleanWhatsAppCallbackNotice() {
   window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
 }
 
+function formatWhatsAppRequestError(error, fallback) {
+  const details = error?.payload?.error;
+  const message = details?.userMessage || details?.message || error?.payload?.message || error?.message || fallback;
+  const metaParts = [
+    details?.code ? `Code: ${details.code}` : "",
+    details?.subcode ? `Subcode: ${details.subcode}` : "",
+    details?.fbtraceId ? `fbtrace_id: ${details.fbtraceId}` : "",
+  ].filter(Boolean);
+  return metaParts.length ? `${message} (${metaParts.join(", ")})` : message;
+}
+
 function extractTemplateVariables(template = {}) {
   const variables = [];
   (template.components || []).forEach((component) => {
@@ -1155,7 +1166,7 @@ function WhatsAppMarketing() {
       startWhatsAppConnection();
     } catch (requestError) {
       setWhatsAppLoading(false);
-      setWhatsAppError(requestError.message || "Unable to start WhatsApp Business connection.");
+      setWhatsAppError(formatWhatsAppRequestError(requestError, "Unable to start WhatsApp Business connection."));
     }
   }
 
@@ -1187,7 +1198,7 @@ function WhatsAppMarketing() {
           setWhatsAppAssets(requestError.payload.assets || emptyWhatsAppAssets());
           setWhatsAppSelection(requestError.payload.selection || emptyWhatsAppSelection());
         }
-        setWhatsAppError(requestError.message || "Unable to refresh WhatsApp assets.");
+        setWhatsAppError(formatWhatsAppRequestError(requestError, "Unable to refresh WhatsApp assets."));
       } finally {
         setWhatsAppLoading(false);
       }
@@ -1206,7 +1217,7 @@ function WhatsAppMarketing() {
           setWhatsAppAssets(requestError.payload.assets || emptyWhatsAppAssets());
           setWhatsAppSelection(requestError.payload.selection || emptyWhatsAppSelection());
         }
-        setWhatsAppError(requestError.message || "Unable to save WhatsApp Business selection.");
+        setWhatsAppError(formatWhatsAppRequestError(requestError, "Unable to save WhatsApp Business selection."));
       });
   }
 
@@ -1221,7 +1232,7 @@ function WhatsAppMarketing() {
       setWhatsAppSelection(saved.selection || emptyWhatsAppSelection());
       setWhatsAppToast("WhatsApp Business selection saved.");
     } catch (requestError) {
-      setWhatsAppError(requestError.message || "Unable to save WhatsApp Business selection.");
+      setWhatsAppError(formatWhatsAppRequestError(requestError, "Unable to save WhatsApp Business selection."));
     } finally {
       setWhatsAppLoading(false);
     }
@@ -1239,7 +1250,7 @@ function WhatsAppMarketing() {
       setSendState({ loading: false, success: false, message: "", messageId: "" });
       setWhatsAppToast("WhatsApp Business disconnected.");
     } catch (requestError) {
-      setWhatsAppError(requestError.message || "Unable to disconnect WhatsApp Business.");
+      setWhatsAppError(formatWhatsAppRequestError(requestError, "Unable to disconnect WhatsApp Business."));
     } finally {
       setWhatsAppLoading(false);
     }
@@ -1266,7 +1277,7 @@ function WhatsAppMarketing() {
         messageId: response.result?.messageId || "",
       });
     } catch (requestError) {
-      const errorMessage = requestError.payload?.error?.userMessage || requestError.message || "WhatsApp test message failed.";
+      const errorMessage = formatWhatsAppRequestError(requestError, "WhatsApp test message failed.");
       setSendState({ loading: false, success: false, message: errorMessage, messageId: "" });
       if (requestError.payload) {
         setWhatsAppStatus({ ...requestError.payload, loading: false });
