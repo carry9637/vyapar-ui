@@ -2,6 +2,7 @@ const REQUIRED_WHATSAPP_PERMISSIONS = ["business_management", "whatsapp_business
 
 let whatsappConnection = {
   connected: false,
+  source: "",
   user: null,
   permissions: [],
   token: null,
@@ -48,6 +49,10 @@ function grantedPermissions(permissions = []) {
       .filter((permission) => permission?.status === "granted")
       .map((permission) => permission.permission),
   );
+}
+
+export function getRequiredWhatsAppPermissions() {
+  return [...REQUIRED_WHATSAPP_PERMISSIONS];
 }
 
 function findById(records = [], id = "") {
@@ -113,6 +118,7 @@ export function buildWhatsAppReadiness(connection = whatsappConnection) {
 function publicConnection() {
   return {
     connected: whatsappConnection.connected,
+    source: whatsappConnection.source,
     user: whatsappConnection.user,
     permissions: whatsappConnection.permissions,
     assets: whatsappConnection.assets,
@@ -137,6 +143,7 @@ export function setWhatsAppConnection(nextConnection) {
     ...whatsappConnection,
     ...nextConnection,
     connected: true,
+    source: nextConnection.source || whatsappConnection.source || "oauth",
     lastError: "",
     connectedAt: nextConnection.connectedAt || new Date().toISOString(),
   };
@@ -147,6 +154,7 @@ export function setWhatsAppConnectionError(message) {
   whatsappConnection = {
     ...whatsappConnection,
     connected: false,
+    source: "",
     user: null,
     permissions: [],
     token: null,
@@ -176,6 +184,7 @@ export function markWhatsAppReconnectRequired(message) {
   whatsappConnection = {
     ...whatsappConnection,
     connected: false,
+    source: whatsappConnection.source,
     user: null,
     permissions: [],
     token: null,
@@ -209,6 +218,7 @@ export function saveWhatsAppTestResult(result) {
 export function disconnectWhatsAppConnection() {
   whatsappConnection = {
     connected: false,
+    source: "",
     user: null,
     permissions: [],
     token: null,

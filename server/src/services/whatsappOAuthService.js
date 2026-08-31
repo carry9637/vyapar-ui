@@ -93,7 +93,7 @@ async function readMetaResponse(response, fallback) {
 
 export function buildWhatsAppAuthorizationRequest(returnTo) {
   const config = getWhatsAppOAuthConfig();
-  if (!config.configured) {
+  if (!config.oauthConfigured) {
     const error = new Error("WhatsApp Business environment configuration is missing.");
     error.code = "WHATSAPP_CONFIG_MISSING";
     throw error;

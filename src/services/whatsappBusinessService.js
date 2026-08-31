@@ -20,6 +20,13 @@ export function startWhatsAppConnection() {
   window.location.assign(`${API_BASE_URL}/api/auth/whatsapp`);
 }
 
+export async function connectWhatsAppTestMode() {
+  const response = await fetch(`${API_BASE_URL}/api/auth/whatsapp/test-connect`, {
+    method: "POST",
+  });
+  return readJsonResponse(response, "Unable to connect WhatsApp test setup.");
+}
+
 export async function getWhatsAppAssets({ businessId, wabaId } = {}) {
   const url = new URL(`${API_BASE_URL}/api/whatsapp-business/assets`);
   if (businessId) url.searchParams.set("businessId", businessId);

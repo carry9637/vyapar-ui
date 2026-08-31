@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { getWhatsAppOAuthConfig } from "../config/whatsappOAuth.js";
-import { fetchWhatsAppAssets } from "../services/whatsappBusinessService.js";
+import { fetchWhatsAppAssets, fetchWhatsAppTestAssets, normalizeWhatsAppError } from "../services/whatsappBusinessService.js";
 import {
   WHATSAPP_OAUTH_STATE_COOKIE,
   buildWhatsAppAuthorizationRequest,
@@ -10,6 +10,7 @@ import {
 } from "../services/whatsappOAuthService.js";
 import {
   disconnectWhatsAppConnection,
+  getRequiredWhatsAppPermissions,
   getWhatsAppPublicConnection,
   setWhatsAppConnection,
   setWhatsAppConnectionError,
@@ -52,6 +53,51 @@ function whatsappRedirect(status, message = "") {
   return url.toString();
 }
 
+function grantedWhatsAppTestPermissions() {
+  return getRequiredWhatsAppPermissions().map((permission) => ({ permission, status: "granted" }));
+}
+
+async function connectWhatsAppTestMode() {
+  const config = getWhatsAppOAuthConfig();
+  if (!config.testModeConfigured) {
+    const error = new Error("WhatsApp test mode is not configured on the backend.");
+    error.code = "WHATSAPP_TEST_CONFIG_MISSING";
+    throw error;
+  }
+
+  const assets = await fetchWhatsAppTestAssets(config.testMode.accessToken, {
+    businessId: config.testMode.businessId,
+    businessName: config.testMode.businessName,
+    wabaId: config.testMode.wabaId,
+    phoneNumberId: config.testMode.phoneNumberId,
+  });
+  const firstApprovedTemplate = assets.templates.find((template) => template.status === "APPROVED");
+
+  return setWhatsAppConnection({
+    source: "test_env",
+    user: {
+      id: "whatsapp-test-env",
+      name: "Meta WhatsApp test setup",
+    },
+    permissions: grantedWhatsAppTestPermissions(),
+    assets,
+    selection: {
+      businessId: assets.selectedBusinessId || "",
+      wabaId: config.testMode.wabaId,
+      phoneNumberId: config.testMode.phoneNumberId,
+      templateId: firstApprovedTemplate?.id || "",
+    },
+    token: {
+      accessToken: config.testMode.accessToken,
+      tokenType: "bearer",
+      expiresIn: null,
+      longLived: false,
+      testMode: true,
+      obtainedAt: new Date().toISOString(),
+    },
+  });
+}
+
 router.get("/whatsapp", (req, res) => {
   try {
     const { authorizationUrl, stateCookie, maxAgeMs } = buildWhatsAppAuthorizationRequest(req.query.returnTo);
@@ -61,6 +107,32 @@ router.get("/whatsapp", (req, res) => {
     const normalized = normalizeMetaError(error, "Unable to start WhatsApp Business OAuth");
     setWhatsAppConnectionError(normalized.message);
     return res.redirect(whatsappRedirect("error", normalized.message));
+  }
+});
+
+router.post("/whatsapp/test-connect", async (_req, res) => {
+  try {
+    const connection = await connectWhatsAppTestMode();
+    return res.json({
+      success: true,
+      configured: true,
+      oauthConfigured: getWhatsAppOAuthConfig().oauthConfigured,
+      testModeConfigured: true,
+      message: "WhatsApp test setup connected.",
+      ...connection,
+    });
+  } catch (error) {
+    const normalized = normalizeWhatsAppError(error, "Unable to connect WhatsApp test setup");
+    setWhatsAppConnectionError(normalized.message);
+    return res.status(502).json({
+      success: false,
+      configured: getWhatsAppOAuthConfig().configured,
+      oauthConfigured: getWhatsAppOAuthConfig().oauthConfigured,
+      testModeConfigured: getWhatsAppOAuthConfig().testModeConfigured,
+      message: normalized.message,
+      error: normalized,
+      ...getWhatsAppPublicConnection(),
+    });
   }
 });
 
@@ -132,6 +204,8 @@ router.get("/whatsapp/status", (_req, res) => {
   return res.json({
     success: true,
     configured: config.configured,
+    oauthConfigured: config.oauthConfigured,
+    testModeConfigured: config.testModeConfigured,
     graphApiVersion: config.graphApiVersion,
     ...getWhatsAppPublicConnection(),
   });

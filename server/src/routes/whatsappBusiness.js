@@ -3,12 +3,14 @@ import { getWhatsAppOAuthConfig } from "../config/whatsappOAuth.js";
 import {
   extractTemplateVariables,
   fetchWhatsAppAssets,
+  fetchWhatsAppTestAssets,
   normalizeRecipient,
   normalizeWhatsAppError,
   sendWhatsAppTemplateMessage,
 } from "../services/whatsappBusinessService.js";
 import {
   buildWhatsAppReadiness,
+  getRequiredWhatsAppPermissions,
   getWhatsAppConnection,
   getWhatsAppPublicConnection,
   markWhatsAppReconnectRequired,
@@ -53,6 +55,10 @@ function selectedTemplate(connection) {
   return (connection.assets.templates || []).find((template) => template.id === connection.selection.templateId) || null;
 }
 
+function grantedWhatsAppTestPermissions() {
+  return getRequiredWhatsAppPermissions().map((permission) => ({ permission, status: "granted" }));
+}
+
 router.get("/assets", async (req, res) => {
   const config = getWhatsAppOAuthConfig();
   const connection = getWhatsAppConnection();
@@ -77,11 +83,23 @@ router.get("/assets", async (req, res) => {
   }
 
   try {
-    const [user, permissions, assets] = await Promise.all([
-      getMetaUser(connection.token.accessToken),
-      getMetaPermissions(connection.token.accessToken),
-      fetchWhatsAppAssets(connection.token.accessToken, { businessId, wabaId }),
-    ]);
+    const isTestConnection = connection.source === "test_env" && connection.token?.testMode;
+    const [user, permissions, assets] = isTestConnection
+      ? [
+          connection.user,
+          grantedWhatsAppTestPermissions(),
+          await fetchWhatsAppTestAssets(connection.token.accessToken, {
+            businessId: config.testMode.businessId,
+            businessName: config.testMode.businessName,
+            wabaId: config.testMode.wabaId,
+            phoneNumberId: config.testMode.phoneNumberId,
+          }),
+        ]
+      : await Promise.all([
+          getMetaUser(connection.token.accessToken),
+          getMetaPermissions(connection.token.accessToken),
+          fetchWhatsAppAssets(connection.token.accessToken, { businessId, wabaId }),
+        ]);
     const selection = pruneSelection(connection.selection, assets, businessId, wabaId);
     updateWhatsAppConnectionSnapshot({ user, permissions, assets, selection });
     return res.json({

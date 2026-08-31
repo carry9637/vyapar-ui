@@ -157,6 +157,23 @@ async function fetchBusinessWabas(business, accessToken, warnings, wabasById) {
   clientWabas.map((waba) => normalizeWaba(waba, business, "client")).forEach((waba) => addUniqueById(wabasById, waba));
 }
 
+async function fetchConfiguredPhoneNumber(accessToken, phoneNumberId, selectedWabaId, warnings) {
+  try {
+    const phone = await graphGet(`/${phoneNumberId}`, accessToken, { fields: PHONE_NUMBER_FIELDS });
+    return normalizePhoneNumber(phone, selectedWabaId);
+  } catch (error) {
+    const normalized = normalizeWhatsAppError(error, "Configured WhatsApp test phone number fetch failed");
+    warnings.push({
+      area: "configured test phone number",
+      category: normalized.category,
+      message: normalized.message,
+      code: normalized.code,
+      subcode: normalized.subcode,
+    });
+    return null;
+  }
+}
+
 export async function fetchWhatsAppAssets(accessToken, options = {}) {
   const warnings = [];
   const businessesById = new Map();
@@ -193,6 +210,43 @@ export async function fetchWhatsAppAssets(accessToken, options = {}) {
     warnings,
     selectedBusinessId: selectedBusiness?.id || "",
     selectedWabaId: selectedWaba?.id || "",
+    fetchedAt: new Date().toISOString(),
+  };
+}
+
+export async function fetchWhatsAppTestAssets(accessToken, options = {}) {
+  const warnings = [];
+  const selectedWabaId = options.wabaId || "";
+  const selectedPhoneNumberId = options.phoneNumberId || "";
+  const businessId = options.businessId || "";
+  const businessName = options.businessName || "Meta Test Business";
+
+  if (!accessToken || !selectedWabaId || !selectedPhoneNumberId) {
+    throw createWhatsAppError("WhatsApp test access token, WABA ID, and phone number ID are required.", "WHATSAPP_TEST_CONFIG_MISSING");
+  }
+
+  const waba = normalizeWaba(await graphGet(`/${selectedWabaId}`, accessToken, { fields: WABA_FIELDS }), businessId ? { id: businessId, name: businessName } : null, "test");
+  const discoveredPhoneNumbers = (
+    await safeFetchEdge(`/${selectedWabaId}/phone_numbers`, accessToken, { fields: PHONE_NUMBER_FIELDS }, warnings, `${waba.name || selectedWabaId} phone numbers`)
+  ).map((phone) => normalizePhoneNumber(phone, selectedWabaId));
+  const configuredPhoneNumber = discoveredPhoneNumbers.find((phone) => phone.id === selectedPhoneNumberId) || (await fetchConfiguredPhoneNumber(accessToken, selectedPhoneNumberId, selectedWabaId, warnings));
+  const phoneNumbersById = new Map();
+  discoveredPhoneNumbers.forEach((phone) => addUniqueById(phoneNumbersById, phone));
+  addUniqueById(phoneNumbersById, configuredPhoneNumber);
+
+  const templates = (
+    await safeFetchEdge(`/${selectedWabaId}/message_templates`, accessToken, { fields: TEMPLATE_FIELDS, limit: 100 }, warnings, `${waba.name || selectedWabaId} message templates`)
+  ).map((template) => normalizeTemplate(template, selectedWabaId));
+
+  return {
+    businesses: businessId ? [{ id: businessId, name: businessName, verificationStatus: "" }] : [],
+    wabas: [waba],
+    phoneNumbers: Array.from(phoneNumbersById.values()),
+    templates,
+    warnings,
+    selectedBusinessId: businessId,
+    selectedWabaId,
+    selectedPhoneNumberId,
     fetchedAt: new Date().toISOString(),
   };
 }

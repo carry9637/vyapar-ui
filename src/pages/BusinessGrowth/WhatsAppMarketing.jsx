@@ -24,6 +24,7 @@ import {
   whatsappMarketingTemplates,
 } from "../../constants/whatsappMarketingData";
 import {
+  connectWhatsAppTestMode,
   disconnectWhatsAppBusiness,
   getWhatsAppAssets,
   getWhatsAppConnectionStatus,
@@ -584,6 +585,8 @@ function WhatsAppBusinessPanel({
 }) {
   const configured = status.configured !== false;
   const connected = Boolean(status.connected);
+  const usingTestMode = status.source === "test_env";
+  const testModeConfigured = Boolean(status.testModeConfigured);
   const readiness = resolveWhatsAppReadiness(status, assets, selection);
   const approvedTemplates = assets.templates.filter((template) => template.status === "APPROVED");
   const selectedTemplate = assets.templates.find((template) => template.id === selection.templateId);
@@ -604,12 +607,12 @@ function WhatsAppBusinessPanel({
               </p>
             </div>
             <span className={`inline-flex rounded-full px-3 py-1 text-xs font-black ${readiness.readyToSend ? "bg-emerald-50 text-emerald-700" : connected ? "bg-amber-50 text-amber-700" : "bg-slate-100 text-slate-600"}`}>
-              {readiness.readyToSend ? "Ready for test" : connected ? "Setup required" : configured ? "Disconnected" : "Config missing"}
+              {readiness.readyToSend ? "Ready for test" : connected ? "Setup required" : testModeConfigured ? "Test setup available" : configured ? "Disconnected" : "Config missing"}
             </span>
           </div>
 
           <div className="mt-4 grid gap-3 rounded-xl border border-slate-100 bg-slate-50 p-3 sm:grid-cols-2">
-            <RequirementRow ok={connected} label="Meta authorization" helper={connected && status.user?.name ? `Connected as ${status.user.name}` : "Required"} />
+            <RequirementRow ok={connected} label="Meta authorization" helper={connected && status.user?.name ? `${usingTestMode ? "Test mode" : "Connected"} as ${status.user.name}` : testModeConfigured ? "Backend test setup ready" : "Required"} />
             <RequirementRow ok={readiness.hasSelectedWaba} label="WhatsApp Business Account" helper={readiness.hasWaba ? "Select one accessible WABA" : "No WABA found"} />
             <RequirementRow ok={readiness.hasSelectedPhoneNumber} label="Business phone number" helper={readiness.hasPhoneNumber ? "Registered phone_number_id required" : "No phone number found"} />
             <RequirementRow ok={readiness.hasSelectedApprovedTemplate} label="Approved message template" helper={readiness.hasApprovedTemplate ? "Only approved templates can be sent" : "No approved template found"} />
@@ -624,7 +627,7 @@ function WhatsAppBusinessPanel({
 
           {!configured && (
             <div className="mt-4 rounded-lg bg-amber-50 p-3 text-xs font-bold leading-5 text-amber-700">
-              Add WhatsApp OAuth env values on the Express backend before connecting.
+              Add WhatsApp OAuth or test-mode env values on the Express backend before connecting.
             </div>
           )}
 
@@ -639,7 +642,7 @@ function WhatsAppBusinessPanel({
             {!connected ? (
               <button type="button" onClick={onConnect} disabled={loading || !configured} className="inline-flex h-10 items-center gap-2 rounded-lg bg-[#1A1F71] px-4 text-sm font-bold text-white hover:bg-[#14185a] disabled:bg-slate-300">
                 <FiZap />
-                Connect WhatsApp Business
+                {testModeConfigured ? "Use Meta Test Setup" : "Connect WhatsApp Business"}
               </button>
             ) : (
               <>
@@ -653,7 +656,7 @@ function WhatsAppBusinessPanel({
                 </button>
                 <button type="button" onClick={onConnect} disabled={loading || !configured} className="inline-flex h-10 items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 text-sm font-bold text-slate-700 hover:bg-slate-50 disabled:text-slate-300">
                   <FiZap />
-                  Reconnect
+                  {usingTestMode ? "Reload Test Setup" : "Reconnect"}
                 </button>
                 <button type="button" onClick={onDisconnect} disabled={loading} className="inline-flex h-10 items-center gap-2 rounded-lg border border-rose-100 bg-white px-4 text-sm font-bold text-rose-600 hover:bg-rose-50 disabled:text-slate-300">
                   <FiX />
@@ -1138,6 +1141,17 @@ function WhatsAppMarketing() {
         setWhatsAppLoading(false);
         return;
       }
+
+      if (status.testModeConfigured) {
+        const testConnection = await connectWhatsAppTestMode();
+        setWhatsAppStatus({ ...testConnection, loading: false });
+        setWhatsAppAssets(testConnection.assets || emptyWhatsAppAssets());
+        setWhatsAppSelection(testConnection.selection || emptyWhatsAppSelection());
+        setWhatsAppToast("Meta WhatsApp test setup loaded.");
+        setWhatsAppLoading(false);
+        return;
+      }
+
       startWhatsAppConnection();
     } catch (requestError) {
       setWhatsAppLoading(false);
