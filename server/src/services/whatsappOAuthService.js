@@ -154,6 +154,17 @@ export async function exchangeWhatsAppCodeForAccessToken(code) {
   return readMetaResponse(response, "WhatsApp authorization code exchange failed");
 }
 
+export async function exchangeWhatsAppEmbeddedSignupCode(code) {
+  const config = getWhatsAppOAuthConfig();
+  const url = new URL(`${config.graphBaseUrl}/oauth/access_token`);
+  url.searchParams.set("client_id", config.appId);
+  url.searchParams.set("client_secret", config.appSecret);
+  url.searchParams.set("code", code);
+
+  const response = await fetch(url);
+  return readMetaResponse(response, "WhatsApp Embedded Signup code exchange failed");
+}
+
 export async function exchangeForLongLivedWhatsAppToken(accessToken) {
   const config = getWhatsAppOAuthConfig();
   const url = new URL(`${config.graphBaseUrl}/oauth/access_token`);

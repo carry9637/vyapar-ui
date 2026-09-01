@@ -27,6 +27,15 @@ export async function connectWhatsAppTestMode() {
   return readJsonResponse(response, "Unable to connect WhatsApp test setup.");
 }
 
+export async function completeWhatsAppEmbeddedSignup(payload) {
+  const response = await fetch(`${API_BASE_URL}/api/auth/whatsapp/embedded-signup`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return readJsonResponse(response, "Unable to complete WhatsApp Embedded Signup.");
+}
+
 export async function getWhatsAppAssets({ businessId, wabaId } = {}) {
   const url = new URL(`${API_BASE_URL}/api/whatsapp-business/assets`);
   if (businessId) url.searchParams.set("businessId", businessId);

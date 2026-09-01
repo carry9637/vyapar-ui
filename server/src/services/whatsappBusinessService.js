@@ -207,6 +207,7 @@ export async function fetchWhatsAppAssets(accessToken, options = {}) {
   const wabasById = new Map();
   const selectedBusinessId = options.businessId || "";
   const selectedWabaId = options.wabaId || "";
+  const selectedPhoneNumberId = options.phoneNumberId || "";
 
   const businesses = await safeFetchEdge("/me/businesses", accessToken, { fields: BUSINESS_FIELDS }, warnings, "businesses");
   businesses.map(normalizeBusiness).forEach((business) => addUniqueById(businessesById, business));
@@ -215,6 +216,20 @@ export async function fetchWhatsAppAssets(accessToken, options = {}) {
   const businessesToFetch = selectedBusiness ? [selectedBusiness] : normalizedBusinesses;
 
   await Promise.all(businessesToFetch.map((business) => fetchBusinessWabas(business, accessToken, warnings, wabasById)));
+  if (selectedWabaId && !wabasById.has(selectedWabaId)) {
+    try {
+      addUniqueById(wabasById, normalizeWaba(await graphGet(`/${selectedWabaId}`, accessToken, { fields: WABA_FIELDS }), selectedBusinessId ? { id: selectedBusinessId, name: "" } : null, "selected"));
+    } catch (error) {
+      const normalized = normalizeWhatsAppError(error, "Selected WhatsApp Business Account fetch failed");
+      warnings.push({
+        area: "selected WABA",
+        category: normalized.category,
+        message: normalized.message,
+        code: normalized.code,
+        subcode: normalized.subcode,
+      });
+    }
+  }
 
   const normalizedWabas = Array.from(wabasById.values());
   const effectiveSelectedWabaId = selectedWabaId || (normalizedWabas.length === 1 ? normalizedWabas[0].id : "");
@@ -230,7 +245,7 @@ export async function fetchWhatsAppAssets(accessToken, options = {}) {
       )
     : [];
 
-  const effectiveSelectedPhoneNumberId = phoneNumbers.length === 1 ? phoneNumbers[0].id : "";
+  const effectiveSelectedPhoneNumberId = selectedPhoneNumberId && phoneNumbers.some((phone) => phone.id === selectedPhoneNumberId) ? selectedPhoneNumberId : phoneNumbers.length === 1 ? phoneNumbers[0].id : "";
 
   return {
     businesses: normalizedBusinesses,

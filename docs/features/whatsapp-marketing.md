@@ -10,7 +10,7 @@ Real bulk sending still needs SQL persistence and a queue worker.
 
 Open WhatsApp Marketing -> backend status check.
 If unavailable: show retry-only connection error.
-If not connected: show onboarding only with `Continue with Meta`.
+If not connected: show onboarding only with `Continue with Meta`, which starts Meta WhatsApp Embedded Signup when configured.
 If connected but incomplete: show setup incomplete and keep campaign builder locked.
 If ready: show compact connected bar -> Creative -> Recipients -> Message -> Preview -> Send.
 Ready means connected WABA + business phone + approved templates loaded; choosing a specific template happens in the Message step.
@@ -29,7 +29,8 @@ Ready means connected WABA + business phone + approved templates loaded; choosin
 ## APIs
 
 - `GET /api/auth/whatsapp/status`: returns connection, assets, selection, readiness, and test-mode availability without auto-connecting test assets.
-- `GET /api/auth/whatsapp`: starts current Meta OAuth dialog using backend config.
+- `GET /api/auth/whatsapp`: legacy redirect OAuth fallback using backend config.
+- `POST /api/auth/whatsapp/embedded-signup`: exchanges Embedded Signup code, stores the server-side token, and hydrates WABA/phone/template assets.
 - `POST /api/auth/whatsapp/test-connect`: explicitly rebuilds backend test setup and returns safe stage diagnostics on failure.
 - `GET /api/whatsapp-business/assets`: refreshes real WABA, phone, and template lists.
 - `POST /api/whatsapp-business/selection`: saves selected WABA, phone number, and approved template in temporary store.
@@ -38,8 +39,8 @@ Ready means connected WABA + business phone + approved templates loaded; choosin
 
 ## Test vs Production Connection
 
-`Continue with Meta` currently calls `/api/auth/whatsapp`, which opens a backend-built Facebook OAuth URL.
-This is not full client Embedded Signup/production onboarding yet; business phone setup and durable tenant storage are pending.
+`Continue with Meta` now uses the Facebook JS SDK Embedded Signup flow when `WHATSAPP_LOGIN_CONFIG_ID` is configured, then completes via the backend.
+Production still needs correct Meta Dashboard Embedded Signup configuration, approved permissions, production phone setup, and durable tenant storage.
 Developer/Test Tools are behind `Manage Connection` and keep Meta Test Setup plus Single Real Test Send.
 Normal customers are not automatically connected to `WHATSAPP_TEST_*` assets.
 Test setup validates config, WABA, phone, and approved templates before returning `TEST_READY`.
@@ -52,7 +53,7 @@ Campaign builder UI uses selected creative, recipient state, friendly template c
 
 ## Pending
 
-Full Embedded Signup/client onboarding, production business phone numbers, PostgreSQL storage, contacts/consent, media upload for poster templates, queue-based bulk sending, retries/idempotency, webhook status persistence, analytics, and tenant isolation.
+Production business phone rollout, PostgreSQL storage, contacts/consent, media upload for poster templates, queue-based bulk sending, retries/idempotency, webhook status persistence, analytics, and tenant isolation.
 
 ## Manager Summary
 

@@ -25,6 +25,7 @@ import {
   whatsappMarketingTemplates,
 } from "../../constants/whatsappMarketingData";
 import {
+  completeWhatsAppEmbeddedSignup,
   connectWhatsAppTestMode,
   disconnectWhatsAppBusiness,
   getWhatsAppAssets,
@@ -38,6 +39,7 @@ const EXPORT_WIDTH = 1080;
 const EXPORT_PADDING = 54;
 const EXPORT_TOP_HEIGHT = 132;
 const EXPORT_BOTTOM_HEIGHT = 238;
+const FACEBOOK_SDK_SCRIPT_ID = "facebook-jssdk";
 
 const shareBackgroundPresets = [
   { id: "clean-white", label: "Clean White", base: "#ffffff", accent: "#e2e8f0", accent2: "#f8fafc", pattern: "diagonal", tone: "light" },
@@ -180,6 +182,103 @@ function isWhatsAppConfigError(error) {
   return error?.status === 503 || error?.payload?.configured === false;
 }
 
+function parseWhatsAppEmbeddedSignupMessage(event) {
+  if (!["https://www.facebook.com", "https://web.facebook.com"].includes(event.origin)) return null;
+  let payload = event.data;
+  if (typeof payload === "string") {
+    try {
+      payload = JSON.parse(payload);
+    } catch {
+      return null;
+    }
+  }
+  if (payload?.type !== "WA_EMBEDDED_SIGNUP") return null;
+  const data = payload.data || {};
+  return {
+    event: payload.event || "",
+    businessId: data.business_id || data.businessId || "",
+    wabaId: data.waba_id || data.wabaId || "",
+    phoneNumberId: data.phone_number_id || data.phoneNumberId || "",
+  };
+}
+
+function loadFacebookSdk({ appId, graphApiVersion }) {
+  return new Promise((resolve, reject) => {
+    if (typeof window === "undefined") {
+      reject(new Error("Facebook SDK can only be loaded in the browser."));
+      return;
+    }
+
+    if (window.FB) {
+      window.FB.init({ appId, cookie: true, xfbml: false, version: graphApiVersion });
+      resolve(window.FB);
+      return;
+    }
+
+    window.fbAsyncInit = () => {
+      window.FB.init({ appId, cookie: true, xfbml: false, version: graphApiVersion });
+      resolve(window.FB);
+    };
+
+    const existingScript = document.getElementById(FACEBOOK_SDK_SCRIPT_ID);
+    if (existingScript) {
+      existingScript.addEventListener("load", () => {
+        window.FB.init({ appId, cookie: true, xfbml: false, version: graphApiVersion });
+        resolve(window.FB);
+      }, { once: true });
+      existingScript.addEventListener("error", () => reject(new Error("Unable to load Facebook SDK.")), { once: true });
+      return;
+    }
+
+    const script = document.createElement("script");
+    script.id = FACEBOOK_SDK_SCRIPT_ID;
+    script.async = true;
+    script.defer = true;
+    script.crossOrigin = "anonymous";
+    script.src = "https://connect.facebook.net/en_US/sdk.js";
+    script.onerror = () => reject(new Error("Unable to load Facebook SDK."));
+    document.body.appendChild(script);
+  });
+}
+
+async function startWhatsAppEmbeddedSignup(embeddedSignup = {}) {
+  const { appId, graphApiVersion, loginConfigId } = embeddedSignup;
+  if (!appId || !graphApiVersion || !loginConfigId) {
+    throw new Error("WhatsApp Embedded Signup configuration is missing.");
+  }
+
+  const facebook = await loadFacebookSdk({ appId, graphApiVersion });
+  let signupData = {};
+
+  return new Promise((resolve, reject) => {
+    const handleSignupMessage = (event) => {
+      const parsed = parseWhatsAppEmbeddedSignupMessage(event);
+      if (parsed) signupData = { ...signupData, ...parsed };
+    };
+    window.addEventListener("message", handleSignupMessage);
+
+    facebook.login(
+      (response) => {
+        window.removeEventListener("message", handleSignupMessage);
+        const code = response?.authResponse?.code || "";
+        if (!code) {
+          reject(new Error("Meta did not return a WhatsApp Embedded Signup authorization code."));
+          return;
+        }
+        resolve({ code, signup: signupData });
+      },
+      {
+        config_id: loginConfigId,
+        response_type: "code",
+        override_default_response_type: true,
+        extras: {
+          setup: {},
+        },
+      },
+    );
+  });
+}
+
 function safeParseJson(value, fallback) {
   try {
     return JSON.parse(value) || fallback;
@@ -262,7 +361,7 @@ function WhatsAppConnectionUnavailable({ error, onRetry, loading }) {
 }
 
 function WhatsAppOnboarding({ status, loading, onContinueMeta, onManageConnection }) {
-  const canUseMeta = status.oauthConfigured !== false;
+  const canUseMeta = Boolean(status.embeddedSignupConfigured || status.oauthConfigured);
   return (
     <section className="grid min-h-[460px] place-items-center rounded-2xl border border-slate-200 bg-white p-6 text-center shadow-sm">
       <div className="max-w-lg">
@@ -277,7 +376,7 @@ function WhatsAppOnboarding({ status, loading, onContinueMeta, onManageConnectio
         <p className="mt-2 text-xs font-bold text-slate-400">You'll securely connect your WhatsApp Business account through Meta.</p>
         {!canUseMeta && (
           <p className="mt-4 rounded-lg bg-amber-50 p-3 text-xs font-bold leading-5 text-amber-800">
-            Production Meta OAuth is not configured yet. Use Manage Connection only for developer test setup.
+            Production Meta onboarding is not configured yet. Use Manage Connection only for developer test setup.
           </p>
         )}
         <div className="mt-6 flex flex-col justify-center gap-3 sm:flex-row">
@@ -1211,7 +1310,7 @@ function WhatsAppBusinessPanel({
           <div className="mt-4 flex flex-wrap gap-2">
             {!connected ? (
               <>
-                <button type="button" onClick={onConnect} disabled={loading || !status.oauthConfigured} className="inline-flex h-10 items-center gap-2 rounded-lg bg-[#1A1F71] px-4 text-sm font-bold text-white hover:bg-[#14185a] disabled:bg-slate-300">
+                <button type="button" onClick={onConnect} disabled={loading || !(status.embeddedSignupConfigured || status.oauthConfigured)} className="inline-flex h-10 items-center gap-2 rounded-lg bg-[#1A1F71] px-4 text-sm font-bold text-white hover:bg-[#14185a] disabled:bg-slate-300">
                   <FiZap />
                   Continue with Meta
                 </button>
@@ -1232,7 +1331,7 @@ function WhatsAppBusinessPanel({
                   <FiRefreshCw />
                   Refresh
                 </button>
-                <button type="button" onClick={usingTestMode ? onTestConnect : onConnect} disabled={loading || (!usingTestMode && !status.oauthConfigured)} className="inline-flex h-10 items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 text-sm font-bold text-slate-700 hover:bg-slate-50 disabled:text-slate-300">
+                <button type="button" onClick={usingTestMode ? onTestConnect : onConnect} disabled={loading || (!usingTestMode && !(status.embeddedSignupConfigured || status.oauthConfigured))} className="inline-flex h-10 items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 text-sm font-bold text-slate-700 hover:bg-slate-50 disabled:text-slate-300">
                   <FiZap />
                   {usingTestMode ? "Reload Test Setup" : "Reconnect"}
                 </button>
@@ -1721,12 +1820,23 @@ function WhatsAppMarketing() {
 
     try {
       const status = await getWhatsAppConnectionStatus();
-      if (status.oauthConfigured === false) {
+      if (!status.embeddedSignupConfigured && !status.oauthConfigured) {
         setWhatsAppStatus({ ...status, loading: false });
         setWhatsAppAssets(status.assets || emptyWhatsAppAssets());
         setWhatsAppSelection(status.selection || emptyWhatsAppSelection());
-        setWhatsAppError("Production Meta OAuth is not configured on the backend.");
+        setWhatsAppError("Production Meta WhatsApp onboarding is not configured on the backend.");
         setShowConnectionPanel(true);
+        setWhatsAppLoading(false);
+        return;
+      }
+
+      if (status.embeddedSignupConfigured) {
+        const signup = await startWhatsAppEmbeddedSignup(status.embeddedSignup);
+        const connected = await completeWhatsAppEmbeddedSignup(signup);
+        setWhatsAppStatus({ ...connected, loading: false });
+        setWhatsAppAssets(connected.assets || emptyWhatsAppAssets());
+        setWhatsAppSelection(connected.selection || emptyWhatsAppSelection());
+        setWhatsAppToast("WhatsApp Business connected.");
         setWhatsAppLoading(false);
         return;
       }
@@ -1893,7 +2003,7 @@ function WhatsAppMarketing() {
 
   const connectionReadiness = resolveWhatsAppReadiness(whatsappStatus, whatsappAssets, whatsappSelection);
   const campaignsUnlocked = connectionReadiness.readyToSend;
-  const configurationError = whatsappStatus.configured === false && whatsappStatus.oauthConfigured === false;
+  const configurationError = whatsappStatus.configured === false && !whatsappStatus.embeddedSignupConfigured && !whatsappStatus.oauthConfigured;
 
   const renderDeveloperTools = () => (
     <section className="space-y-3">

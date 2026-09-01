@@ -5,6 +5,7 @@ import {
   WHATSAPP_OAUTH_STATE_COOKIE,
   buildWhatsAppAuthorizationRequest,
   exchangeForLongLivedWhatsAppToken,
+  exchangeWhatsAppEmbeddedSignupCode,
   exchangeWhatsAppCodeForAccessToken,
   validateWhatsAppOAuthState,
 } from "../services/whatsappOAuthService.js";
@@ -74,6 +75,8 @@ router.post("/whatsapp/test-connect", async (_req, res) => {
       success: true,
       configured: config.configured,
       oauthConfigured: config.oauthConfigured,
+      embeddedSignupConfigured: config.embeddedSignupConfigured,
+      embeddedSignup: config.embeddedSignup,
       testModeConfigured: config.testModeConfigured,
       testConnectionState: publicConnection.readiness?.readyToSend ? "TEST_READY" : "TEST_INCOMPLETE",
       message: "WhatsApp test setup connected.",
@@ -104,6 +107,96 @@ router.post("/whatsapp/test-connect", async (_req, res) => {
       success: false,
       configured: config.configured,
       oauthConfigured: config.oauthConfigured,
+      embeddedSignupConfigured: config.embeddedSignupConfigured,
+      testModeConfigured: config.testModeConfigured,
+      message: normalized.message,
+      error: normalized,
+      ...getWhatsAppPublicConnection(),
+    });
+  }
+});
+
+router.post("/whatsapp/embedded-signup", async (req, res) => {
+  const config = getWhatsAppOAuthConfig();
+  if (!config.embeddedSignupConfigured) {
+    return res.status(503).json({
+      success: false,
+      configured: config.configured,
+      oauthConfigured: config.oauthConfigured,
+      embeddedSignupConfigured: config.embeddedSignupConfigured,
+      testModeConfigured: config.testModeConfigured,
+      message: "WhatsApp Embedded Signup is not configured on the backend.",
+      error: { category: "WHATSAPP_CONFIG_MISSING", stage: "CONFIG" },
+      ...getWhatsAppPublicConnection(),
+    });
+  }
+
+  const code = String(req.body?.code || "").trim();
+  if (!code) {
+    return res.status(400).json({
+      success: false,
+      configured: config.configured,
+      oauthConfigured: config.oauthConfigured,
+      embeddedSignupConfigured: config.embeddedSignupConfigured,
+      testModeConfigured: config.testModeConfigured,
+      message: "WhatsApp Embedded Signup authorization code missing.",
+      error: { category: "WHATSAPP_AUTH_ERROR", stage: "AUTH_ERROR" },
+      ...getWhatsAppPublicConnection(),
+    });
+  }
+
+  try {
+    const tokenPayload = await exchangeWhatsAppEmbeddedSignupCode(code);
+    const accessToken = tokenPayload.access_token;
+    const signupAssets = req.body?.signup || {};
+    const businessId = String(signupAssets.businessId || signupAssets.business_id || "").trim();
+    const wabaId = String(signupAssets.wabaId || signupAssets.waba_id || "").trim();
+    const phoneNumberId = String(signupAssets.phoneNumberId || signupAssets.phone_number_id || "").trim();
+    const [user, permissions, assets] = await Promise.all([
+      getMetaUser(accessToken),
+      getMetaPermissions(accessToken),
+      fetchWhatsAppAssets(accessToken, { businessId, wabaId, phoneNumberId }),
+    ]);
+
+    setWhatsAppConnection({
+      source: "embedded_signup",
+      user,
+      permissions,
+      assets,
+      selection: {
+        businessId: assets.selectedBusinessId || businessId || "",
+        wabaId: assets.selectedWabaId || wabaId || "",
+        phoneNumberId: assets.selectedPhoneNumberId || phoneNumberId || "",
+        templateId: "",
+      },
+      token: {
+        accessToken,
+        tokenType: tokenPayload.token_type || "bearer",
+        expiresIn: tokenPayload.expires_in || null,
+        longLived: false,
+        embeddedSignup: true,
+        obtainedAt: new Date().toISOString(),
+      },
+    });
+
+    return res.json({
+      success: true,
+      configured: config.configured,
+      oauthConfigured: config.oauthConfigured,
+      embeddedSignupConfigured: config.embeddedSignupConfigured,
+      testModeConfigured: config.testModeConfigured,
+      message: "WhatsApp Business connected.",
+      ...getWhatsAppPublicConnection(),
+    });
+  } catch (error) {
+    const normalized = normalizeWhatsAppError(error, "WhatsApp Embedded Signup failed");
+    const status = normalized.category === "TOKEN_EXPIRED" ? 401 : normalized.stage === "CONFIG" ? 400 : 502;
+    setWhatsAppConnectionError(normalized.message);
+    return res.status(status).json({
+      success: false,
+      configured: config.configured,
+      oauthConfigured: config.oauthConfigured,
+      embeddedSignupConfigured: config.embeddedSignupConfigured,
       testModeConfigured: config.testModeConfigured,
       message: normalized.message,
       error: normalized,
@@ -187,6 +280,8 @@ router.get("/whatsapp/status", async (_req, res) => {
     success: true,
     configured: config.configured,
     oauthConfigured: config.oauthConfigured,
+    embeddedSignupConfigured: config.embeddedSignupConfigured,
+    embeddedSignup: config.embeddedSignup,
     testModeConfigured: config.testModeConfigured,
     graphApiVersion: config.graphApiVersion,
     ...getWhatsAppPublicConnection(),
