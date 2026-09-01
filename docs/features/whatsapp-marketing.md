@@ -2,67 +2,58 @@
 
 ## Purpose
 
-WhatsApp Marketing now has three clear areas: campaign creation, poster creatives, and official WhatsApp Business test messaging.
-The poster gallery still supports local personalization, PNG download, browser share, and manual `wa.me` sharing.
-Phase 1 adds real Meta WhatsApp Business Platform foundation for one approved-template test send only.
+WhatsApp Marketing combines poster creatives with an official WhatsApp Business connection foundation.
+The current product UX is connection-first: campaigns unlock only after the backend confirms WABA, phone number, and approved templates.
+Real bulk sending still needs SQL persistence and a queue worker.
 
-## Current Architecture
+## Current User Flow
 
-Frontend: `WhatsAppMarketing.jsx` -> `src/services/whatsappBusinessService.js`.
-Backend: `/api/auth/whatsapp`, `/api/whatsapp-business/*`, `/api/whatsapp/webhook`.
-Graph API calls stay backend-only; tokens and App Secret are never exposed to Vite.
-The campaign builder is UI/UX only until SQL recipients and a queue worker are added.
+Open WhatsApp Marketing -> backend status check.
+If unavailable: show retry-only connection error.
+If not connected: show onboarding only with `Continue with Meta`.
+If connected but incomplete: show setup incomplete and keep campaign builder locked.
+If ready: show compact connected bar -> Creative -> Recipients -> Message -> Preview -> Send.
 
-## Files Created
+## Files Involved
 
-- `server/src/config/whatsappOAuth.js`: WhatsApp OAuth and backend test-mode config.
-- `server/src/services/whatsappOAuthService.js`: WhatsApp OAuth state, callback token exchange, JSON Graph POST.
-- `server/src/services/whatsappConnectionStore.js`: temporary in-memory connection, source, selection, readiness state.
-- `server/src/services/whatsappBusinessService.js`: real WABA, phone number, template fetch, and template test send.
-- `server/src/routes/whatsappAuth.js`: OAuth connect/callback/status/disconnect plus test env connect.
-- `server/src/routes/whatsappBusiness.js`: asset selection and one-recipient test send routes.
-- `server/src/routes/whatsappWebhook.js`: webhook verification and event receiver foundation.
-- `src/services/whatsappBusinessService.js`: frontend API client.
+- `src/pages/BusinessGrowth/WhatsAppMarketing.jsx`: poster gallery, connection-first gating, campaign wizard, developer/test tools.
+- `src/services/whatsappBusinessService.js`: frontend client for status, OAuth start, assets, selection, disconnect, and test send.
+- `server/src/routes/whatsappAuth.js`: WhatsApp OAuth start/callback/status/disconnect and test env connect.
+- `server/src/routes/whatsappBusiness.js`: asset/template loading, selection save, and one real test send.
+- `server/src/routes/whatsappWebhook.js`: production webhook verification and event receiver foundation.
+- `server/src/services/whatsappBusinessService.js`: Graph API WABA/phone/template fetch and `/messages` send.
+- `server/src/services/whatsappConnectionStore.js`: temporary in-memory connection/selection/readiness interface.
+- `server/src/services/whatsappTestModeService.js`: rebuilds test connection from backend env without exposing tokens.
 
-## Files Changed
+## APIs
 
-- `src/pages/BusinessGrowth/WhatsAppMarketing.jsx`: added campaign wizard and secondary Connection/Test panel; poster UI preserved.
-- `server/src/index.js`: mounted WhatsApp auth/business/webhook routes.
-- `server/.env.example`: added WhatsApp OAuth/webhook env placeholders.
+- `GET /api/auth/whatsapp/status`: returns connection, assets, selection, readiness, and test-mode availability.
+- `GET /api/auth/whatsapp`: starts current Meta OAuth dialog using backend config.
+- `POST /api/auth/whatsapp/test-connect`: loads backend Meta test WABA/phone/template assets.
+- `GET /api/whatsapp-business/assets`: refreshes real WABA, phone, and template lists.
+- `POST /api/whatsapp-business/selection`: saves selected WABA, phone number, and approved template in temporary store.
+- `POST /api/whatsapp-business/send-test`: sends one opted-in approved-template message via Cloud API.
+- `GET/POST /api/whatsapp/webhook`: webhook verification and future status event intake.
 
-## Real Flow
+## Test vs Production Connection
 
-Connect WhatsApp Business -> Meta OAuth -> fetch businesses/WABAs -> select WABA -> fetch phone numbers/templates -> select phone number and approved template -> confirm opted-in test recipient -> send one real template message through `/{phone-number-id}/messages`.
+`Continue with Meta` currently calls `/api/auth/whatsapp`, which opens a backend-built Facebook OAuth URL.
+This is not full client Embedded Signup/production onboarding yet; business phone setup and durable tenant storage are pending.
+Developer/Test Tools are behind `Manage Connection` and keep Meta Test Setup plus Single Real Test Send.
 
-Current testing can also use backend env test mode: load configured test WABA/phone IDs -> fetch real templates -> select approved template -> send one opted-in test message.
+## What Works
 
-Product UX: Create Campaign -> Creative -> Recipients -> Message -> Preview -> Send. Send/Schedule is blocked until SQL/queue work exists.
-Message step uses friendly approved-template choices; raw Meta template names are secondary details only.
-Poster delivery requires an approved image-header template plus future media upload/job handling.
+Poster personalization, download, browser share, and manual `wa.me` fallback remain preserved.
+Backend-only Graph API calls can fetch real test WABA assets/templates and send one approved-template test message.
+Campaign builder UI uses selected creative, recipient state, friendly template choices, variables, and preview, but bulk send is blocked.
 
-## Environment / Meta Setup
+## Pending
 
-OAuth env: `META_APP_ID`, `META_APP_SECRET`, `META_GRAPH_API_VERSION`, `WHATSAPP_REDIRECT_URI`, optional `WHATSAPP_LOGIN_CONFIG_ID`, `WHATSAPP_WEBHOOK_VERIFY_TOKEN`.
-Test-mode env: `WHATSAPP_TEST_ACCESS_TOKEN`, `WHATSAPP_TEST_WABA_ID`, `WHATSAPP_TEST_PHONE_NUMBER_ID`, optional `WHATSAPP_TEST_BUSINESS_ID`, `WHATSAPP_TEST_BUSINESS_NAME`.
-Meta app must request `business_management`, `whatsapp_business_management`, and `whatsapp_business_messaging`.
-Configure callback URL `/api/auth/whatsapp/callback` and webhook URL `/api/whatsapp/webhook` in Meta Dashboard.
-
-## Security Notes
-
-Temporary connection/token storage is in server memory only and is not final production persistence.
-PostgreSQL later must store encrypted tokens, WABAs, phone numbers, contacts/consent, templates, campaigns, recipients, message IDs, webhook events, retries, and audit logs.
-Webhook delivery/read analytics are not processed yet.
-Backend test mode uses Meta dashboard test credentials only; it is not client onboarding.
-Status/save/send routes rebuild the test-mode connection from env, so reloads or server memory loss do not require OAuth.
-
-## Phase 2+
-
-Add Embedded Signup/client OAuth, SQL persistence, real production phone numbers, contact import/selection, consent/opt-out records, template creation/submission, media upload for poster templates, queued bulk sending, retries, message status webhooks, analytics, and tenant isolation.
+Full Embedded Signup/client onboarding, production business phone numbers, PostgreSQL storage, contacts/consent, media upload for poster templates, queue-based bulk sending, retries/idempotency, webhook status persistence, analytics, and tenant isolation.
 
 ## Manager Summary
 
-The existing poster creator remains intact.
-The main page now starts with a customer-style campaign wizard.
-The new panel can use backend test credentials to send one real approved-template message through WhatsApp Cloud API.
-OAuth remains prepared for later client onboarding but is not required for current Meta test-number development.
-Bulk marketing is intentionally not implemented yet.
+User pehle WhatsApp Business connect karega, tabhi campaign tools unlock honge.
+Connected business phone aur approved templates backend se confirm hone ke baad hi campaign builder dikhega.
+Test setup ab normal customer screen par nahi hai; Manage Connection ke andar Developer/Test Tools me hai.
+Abhi one real approved-template test send possible hai, bulk campaign sending next backend phase hai.

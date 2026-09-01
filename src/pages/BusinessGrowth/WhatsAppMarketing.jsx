@@ -226,6 +226,113 @@ function renderTemplateMessage(template = {}, variables = {}, fallbackMessage = 
   return body.replace(/\{\{(\d+)\}\}/g, (_match, index) => variables[`body:${index}`] || `[${index}]`);
 }
 
+function selectedBusinessPhone(assets = emptyWhatsAppAssets(), selection = emptyWhatsAppSelection()) {
+  return assets.phoneNumbers.find((phone) => phone.id === selection.phoneNumberId) || null;
+}
+
+function WhatsAppConnectionUnavailable({ error, onRetry, loading }) {
+  return (
+    <section className="grid min-h-[420px] place-items-center rounded-2xl border border-slate-200 bg-white p-6 text-center shadow-sm">
+      <div className="max-w-md">
+        <span className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-amber-50 text-amber-600">
+          <FiAlertCircle className="h-7 w-7" />
+        </span>
+        <h2 className="mt-5 text-xl font-black text-slate-950">WhatsApp connection is temporarily unavailable</h2>
+        <p className="mt-2 text-sm font-semibold leading-6 text-slate-500">
+          {error || "We could not reach the backend connection status right now."}
+        </p>
+        <button type="button" onClick={onRetry} disabled={loading} className="mt-5 inline-flex h-11 items-center gap-2 rounded-lg bg-[#1A1F71] px-5 text-sm font-black text-white hover:bg-[#14185a] disabled:bg-slate-300">
+          <FiRefreshCw />
+          Retry
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function WhatsAppOnboarding({ status, loading, onContinueMeta, onManageConnection }) {
+  const canUseMeta = status.oauthConfigured !== false;
+  return (
+    <section className="grid min-h-[460px] place-items-center rounded-2xl border border-slate-200 bg-white p-6 text-center shadow-sm">
+      <div className="max-w-lg">
+        <span className="mx-auto grid h-16 w-16 place-items-center rounded-2xl bg-emerald-50 text-emerald-700">
+          <FiMessageCircle className="h-8 w-8" />
+        </span>
+        <p className="mt-6 text-sm font-black uppercase tracking-wide text-[#36A175]">WhatsApp Marketing</p>
+        <h2 className="mt-2 text-2xl font-black text-slate-950">Connect WhatsApp Business</h2>
+        <p className="mt-3 text-sm font-semibold leading-6 text-slate-500">
+          Connect your official WhatsApp Business account to start creating campaigns.
+        </p>
+        {!canUseMeta && (
+          <p className="mt-4 rounded-lg bg-amber-50 p-3 text-xs font-bold leading-5 text-amber-800">
+            Production Meta OAuth is not configured yet. Use Manage Connection only for developer test setup.
+          </p>
+        )}
+        <div className="mt-6 flex flex-col justify-center gap-3 sm:flex-row">
+          <button type="button" onClick={onContinueMeta} disabled={loading || !canUseMeta} className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-[#1A1F71] px-5 text-sm font-black text-white hover:bg-[#14185a] disabled:bg-slate-300">
+            <FiZap />
+            Continue with Meta
+          </button>
+          <button type="button" onClick={onManageConnection} className="inline-flex h-11 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-5 text-sm font-black text-slate-700 hover:bg-slate-50">
+            <FiShield />
+            Manage Connection
+          </button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function WhatsAppSetupIncomplete({ readiness, assets, selection, onManageConnection }) {
+  const phone = selectedBusinessPhone(assets, selection);
+  return (
+    <section className="rounded-2xl border border-amber-100 bg-white p-5 shadow-sm">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <p className="text-sm font-black text-amber-700">WhatsApp setup incomplete</p>
+          <h2 className="mt-1 text-xl font-black text-slate-950">Complete connection before creating campaigns</h2>
+          <p className="mt-2 max-w-2xl text-sm font-semibold leading-6 text-slate-500">
+            Campaigns unlock only after the backend confirms a valid connection, WABA, business phone number, and at least one approved template.
+          </p>
+        </div>
+        <button type="button" onClick={onManageConnection} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-[#1A1F71] px-4 text-sm font-black text-white hover:bg-[#14185a]">
+          <FiShield />
+          Manage Connection
+        </button>
+      </div>
+      <div className="mt-5 grid gap-3 rounded-xl bg-amber-50 p-4 sm:grid-cols-2">
+        <RequirementRow ok={readiness.connected} label="Connection" helper={readiness.connected ? "Connected" : "Not connected"} />
+        <RequirementRow ok={readiness.hasSelectedWaba} label="WhatsApp Business Account" helper={readiness.hasWaba ? "Select WABA" : "No WABA found"} />
+        <RequirementRow ok={readiness.hasSelectedPhoneNumber} label="Business phone" helper={phone?.displayPhoneNumber || (readiness.hasPhoneNumber ? "Select phone number" : "No phone number found")} />
+        <RequirementRow ok={readiness.hasSelectedApprovedTemplate} label="Approved templates" helper={readiness.hasApprovedTemplate ? `${assets.templates.filter((template) => template.status === "APPROVED").length} approved loaded` : "No approved template found"} />
+      </div>
+      {readiness.blockingReason && <p className="mt-4 text-sm font-bold text-amber-800">{readiness.blockingReason}</p>}
+    </section>
+  );
+}
+
+function WhatsAppConnectedBar({ status, assets, selection, onManageConnection }) {
+  const phone = selectedBusinessPhone(assets, selection);
+  const approvedCount = assets.templates.filter((template) => template.status === "APPROVED").length;
+  return (
+    <section className="flex flex-col gap-3 rounded-2xl border border-emerald-100 bg-white p-4 shadow-sm lg:flex-row lg:items-center lg:justify-between">
+      <div className="flex flex-wrap items-center gap-3 text-sm font-bold text-slate-700">
+        <span className="inline-flex items-center gap-2 rounded-full bg-emerald-50 px-3 py-1 text-emerald-700">
+          <FiCheckCircle />
+          WhatsApp Business: Connected
+        </span>
+        <span>Business phone: {phone?.displayPhoneNumber || phone?.verifiedName || "Selected"}</span>
+        <span>Approved templates: {approvedCount}</span>
+        {status.source === "test_env" && <span className="rounded-full bg-amber-50 px-2.5 py-1 text-xs font-black text-amber-700">Test mode</span>}
+      </div>
+      <button type="button" onClick={onManageConnection} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-4 text-sm font-black text-slate-700 hover:bg-white">
+        <FiShield />
+        Manage Connection
+      </button>
+    </section>
+  );
+}
+
 function extractTemplateVariables(template = {}) {
   const variables = [];
   (template.components || []).forEach((component) => {
@@ -950,7 +1057,7 @@ function WhatsAppCampaignBuilder({ status, assets, onOpenConnection }) {
         </div>
         <button type="button" onClick={onOpenConnection} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-4 text-sm font-black text-slate-700 hover:bg-white">
           <FiShield />
-          Connection/Test
+          Manage Connection
         </button>
       </div>
 
@@ -1005,6 +1112,7 @@ function WhatsAppBusinessPanel({
   error,
   sendState,
   onConnect,
+  onTestConnect,
   onRefresh,
   onDisconnect,
   onSelectionChange,
@@ -1070,10 +1178,18 @@ function WhatsAppBusinessPanel({
 
           <div className="mt-4 flex flex-wrap gap-2">
             {!connected ? (
-              <button type="button" onClick={onConnect} disabled={loading || !configured} className="inline-flex h-10 items-center gap-2 rounded-lg bg-[#1A1F71] px-4 text-sm font-bold text-white hover:bg-[#14185a] disabled:bg-slate-300">
-                <FiZap />
-                {testModeConfigured ? "Use Meta Test Setup" : "Connect WhatsApp Business"}
-              </button>
+              <>
+                <button type="button" onClick={onConnect} disabled={loading || !status.oauthConfigured} className="inline-flex h-10 items-center gap-2 rounded-lg bg-[#1A1F71] px-4 text-sm font-bold text-white hover:bg-[#14185a] disabled:bg-slate-300">
+                  <FiZap />
+                  Continue with Meta
+                </button>
+                {testModeConfigured && (
+                  <button type="button" onClick={onTestConnect} disabled={loading} className="inline-flex h-10 items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 text-sm font-bold text-amber-800 hover:bg-amber-100 disabled:text-slate-300">
+                    <FiShield />
+                    Use Meta Test Setup
+                  </button>
+                )}
+              </>
             ) : (
               <>
                 <button type="button" onClick={onSaveSelection} disabled={saveDisabled} className="inline-flex h-10 items-center gap-2 rounded-lg bg-[#36A175] px-4 text-sm font-bold text-white hover:bg-[#2c8a64] disabled:bg-slate-300">
@@ -1084,7 +1200,7 @@ function WhatsAppBusinessPanel({
                   <FiRefreshCw />
                   Refresh
                 </button>
-                <button type="button" onClick={onConnect} disabled={loading || !configured} className="inline-flex h-10 items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 text-sm font-bold text-slate-700 hover:bg-slate-50 disabled:text-slate-300">
+                <button type="button" onClick={usingTestMode ? onTestConnect : onConnect} disabled={loading || (!usingTestMode && !status.oauthConfigured)} className="inline-flex h-10 items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 text-sm font-bold text-slate-700 hover:bg-slate-50 disabled:text-slate-300">
                   <FiZap />
                   {usingTestMode ? "Reload Test Setup" : "Reconnect"}
                 </button>
@@ -1479,6 +1595,7 @@ function WhatsAppMarketing() {
   const [whatsappError, setWhatsAppError] = useState(callbackNotice.error);
   const [whatsappToast, setWhatsAppToast] = useState(callbackNotice.toast);
   const [showConnectionPanel, setShowConnectionPanel] = useState(Boolean(callbackNotice.error));
+  const [connectionStatusUnavailable, setConnectionStatusUnavailable] = useState(false);
   const [testForm, setTestForm] = useState({ countryCode: "+91", phoneNumber: "", optInConfirmed: false, variables: {} });
   const [sendState, setSendState] = useState({ loading: false, success: false, message: "", messageId: "" });
 
@@ -1499,6 +1616,7 @@ function WhatsAppMarketing() {
     getWhatsAppConnectionStatus()
       .then((status) => {
         if (!active) return null;
+        setConnectionStatusUnavailable(false);
         setWhatsAppStatus({ ...status, loading: false });
         setWhatsAppAssets(status.assets || emptyWhatsAppAssets());
         setWhatsAppSelection(status.selection || emptyWhatsAppSelection());
@@ -1514,14 +1632,15 @@ function WhatsAppMarketing() {
       })
       .catch((statusError) => {
         if (!active) return;
+        setConnectionStatusUnavailable(true);
         if (statusError.payload) {
           setWhatsAppStatus({ ...statusError.payload, loading: false });
           setWhatsAppAssets(statusError.payload.assets || emptyWhatsAppAssets());
           setWhatsAppSelection(statusError.payload.selection || emptyWhatsAppSelection());
         } else {
-          setWhatsAppStatus((current) => ({ ...current, loading: false, connected: false }));
+          setWhatsAppStatus((current) => ({ ...current, loading: false }));
         }
-        setWhatsAppError(statusError.message || "Unable to load WhatsApp Business connection status.");
+        setWhatsAppError(formatWhatsAppRequestError(statusError, "Unable to load WhatsApp Business connection status."));
       });
 
     return () => {
@@ -1532,6 +1651,7 @@ function WhatsAppMarketing() {
   async function refreshWhatsAppConnection(selection = whatsappSelection) {
     setWhatsAppLoading(true);
     setWhatsAppError("");
+    setConnectionStatusUnavailable(false);
 
     try {
       const status = await getWhatsAppConnectionStatus();
@@ -1544,49 +1664,73 @@ function WhatsAppMarketing() {
       setWhatsAppStatus({ ...nextStatus, loading: false });
       setWhatsAppAssets(nextStatus.assets || emptyWhatsAppAssets());
       setWhatsAppSelection(nextStatus.selection || emptyWhatsAppSelection());
+      setConnectionStatusUnavailable(false);
       return nextStatus;
     } catch (requestError) {
+      setConnectionStatusUnavailable(true);
       if (requestError.payload) {
         setWhatsAppStatus({ ...requestError.payload, loading: false });
         setWhatsAppAssets(requestError.payload.assets || emptyWhatsAppAssets());
         setWhatsAppSelection(requestError.payload.selection || emptyWhatsAppSelection());
       }
-      setWhatsAppError(requestError.message || "Unable to refresh WhatsApp Business connection.");
+      setWhatsAppError(formatWhatsAppRequestError(requestError, "Unable to refresh WhatsApp Business connection."));
       return null;
     } finally {
       setWhatsAppLoading(false);
     }
   }
 
-  async function handleConnectWhatsApp() {
+  async function handleContinueWithMeta() {
     setWhatsAppLoading(true);
     setWhatsAppError("");
+    setConnectionStatusUnavailable(false);
 
     try {
       const status = await getWhatsAppConnectionStatus();
-      if (!status.configured) {
+      if (status.oauthConfigured === false) {
         setWhatsAppStatus({ ...status, loading: false });
         setWhatsAppAssets(status.assets || emptyWhatsAppAssets());
         setWhatsAppSelection(status.selection || emptyWhatsAppSelection());
-        setWhatsAppError("WhatsApp Business environment configuration is missing on the backend.");
-        setWhatsAppLoading(false);
-        return;
-      }
-
-      if (status.testModeConfigured) {
-        const testConnection = await connectWhatsAppTestMode();
-        setWhatsAppStatus({ ...testConnection, loading: false });
-        setWhatsAppAssets(testConnection.assets || emptyWhatsAppAssets());
-        setWhatsAppSelection(testConnection.selection || emptyWhatsAppSelection());
-        setWhatsAppToast("Meta WhatsApp test setup loaded.");
+        setWhatsAppError("Production Meta OAuth is not configured on the backend.");
+        setShowConnectionPanel(true);
         setWhatsAppLoading(false);
         return;
       }
 
       startWhatsAppConnection();
     } catch (requestError) {
+      setConnectionStatusUnavailable(true);
       setWhatsAppLoading(false);
       setWhatsAppError(formatWhatsAppRequestError(requestError, "Unable to start WhatsApp Business connection."));
+    }
+  }
+
+  async function handleConnectWhatsAppTestMode() {
+    setWhatsAppLoading(true);
+    setWhatsAppError("");
+    setConnectionStatusUnavailable(false);
+
+    try {
+      const status = await getWhatsAppConnectionStatus();
+      if (!status.testModeConfigured) {
+        setWhatsAppStatus({ ...status, loading: false });
+        setWhatsAppAssets(status.assets || emptyWhatsAppAssets());
+        setWhatsAppSelection(status.selection || emptyWhatsAppSelection());
+        setWhatsAppError("Meta WhatsApp test setup environment values are missing on the backend.");
+        setWhatsAppLoading(false);
+        return;
+      }
+
+      const testConnection = await connectWhatsAppTestMode();
+      setWhatsAppStatus({ ...testConnection, loading: false });
+      setWhatsAppAssets(testConnection.assets || emptyWhatsAppAssets());
+      setWhatsAppSelection(testConnection.selection || emptyWhatsAppSelection());
+      setWhatsAppToast("Meta WhatsApp test setup loaded.");
+      setShowConnectionPanel(true);
+    } catch (requestError) {
+      setWhatsAppError(formatWhatsAppRequestError(requestError, "Unable to start WhatsApp Business connection."));
+    } finally {
+      setWhatsAppLoading(false);
     }
   }
 
@@ -1707,6 +1851,40 @@ function WhatsAppMarketing() {
     }
   }
 
+  const connectionReadiness = resolveWhatsAppReadiness(whatsappStatus, whatsappAssets, whatsappSelection);
+  const campaignsUnlocked = connectionReadiness.readyToSend;
+
+  const renderDeveloperTools = () => (
+    <section className="space-y-3">
+      <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <p className="text-sm font-black text-slate-950">Developer/Test Tools</p>
+          <p className="text-xs font-semibold leading-5 text-slate-500">Meta test setup, diagnostics, and one-recipient Cloud API test send.</p>
+        </div>
+        <button type="button" onClick={() => setShowConnectionPanel(false)} className="h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs font-black text-slate-600 hover:bg-slate-50">
+          Hide Tools
+        </button>
+      </div>
+      <WhatsAppBusinessPanel
+        status={whatsappStatus}
+        assets={whatsappAssets}
+        selection={whatsappSelection}
+        loading={whatsappLoading || whatsappStatus.loading}
+        error={whatsappError}
+        sendState={sendState}
+        onConnect={handleContinueWithMeta}
+        onTestConnect={handleConnectWhatsAppTestMode}
+        onRefresh={() => refreshWhatsAppConnection()}
+        onDisconnect={handleDisconnectWhatsApp}
+        onSelectionChange={handleWhatsAppSelectionChange}
+        onSaveSelection={handleSaveWhatsAppSelection}
+        onSendTest={handleSendTestWhatsApp}
+        testForm={testForm}
+        setTestForm={setTestForm}
+      />
+    </section>
+  );
+
   return (
     <div className="min-h-full bg-slate-50">
       <header className="border-b border-slate-200 bg-white px-5 py-5">
@@ -1716,100 +1894,96 @@ function WhatsAppMarketing() {
             <h1 className="mt-1 text-2xl font-black text-slate-950">WhatsApp Marketing</h1>
             <p className="mt-1 text-sm text-slate-500">Personalize ready posters and share them with customers.</p>
           </div>
-          <label className="flex h-11 min-w-0 items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-4 shadow-sm xl:w-[420px]">
-            <FiSearch className="h-4 w-4 text-slate-400" />
-            <input
-              value={searchQuery}
-              onChange={(event) => setSearchQuery(event.target.value)}
-              placeholder="Search posters"
-              className="min-w-0 flex-1 bg-transparent text-sm outline-none"
-            />
-          </label>
+          {campaignsUnlocked && (
+            <label className="flex h-11 min-w-0 items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-4 shadow-sm xl:w-[420px]">
+              <FiSearch className="h-4 w-4 text-slate-400" />
+              <input
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                placeholder="Search posters"
+                className="min-w-0 flex-1 bg-transparent text-sm outline-none"
+              />
+            </label>
+          )}
         </div>
       </header>
 
       <main className="space-y-5 p-5">
         {whatsappToast && <div className="rounded-lg border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm font-black text-emerald-700">{whatsappToast}</div>}
 
-        <WhatsAppCampaignBuilder status={whatsappStatus} assets={whatsappAssets} onOpenConnection={() => setShowConnectionPanel((current) => !current)} />
-
-        <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        {whatsappStatus.loading ? (
+          <section className="grid min-h-[420px] place-items-center rounded-2xl border border-slate-200 bg-white p-6 text-center shadow-sm">
             <div>
-              <p className="text-sm font-black text-slate-950">Connection/Test</p>
-              <p className="mt-1 text-xs font-semibold text-slate-500">{whatsappStatus.connected ? "WhatsApp Cloud API connection is available." : "Connect or load test setup to fetch approved templates."}</p>
+              <FiRefreshCw className="mx-auto h-9 w-9 animate-spin text-slate-300" />
+              <p className="mt-4 text-sm font-black text-slate-700">Checking WhatsApp connection...</p>
             </div>
-            <button type="button" onClick={() => setShowConnectionPanel((current) => !current)} className="h-10 rounded-lg border border-slate-200 bg-slate-50 px-4 text-sm font-black text-slate-700 hover:bg-white">
-              {showConnectionPanel ? "Hide" : "Open"} Connection/Test
-            </button>
-          </div>
-          {(showConnectionPanel || !whatsappStatus.connected) && (
-            <div className="mt-4">
-              <WhatsAppBusinessPanel
-                status={whatsappStatus}
-                assets={whatsappAssets}
-                selection={whatsappSelection}
-                loading={whatsappLoading || whatsappStatus.loading}
-                error={whatsappError}
-                sendState={sendState}
-                onConnect={handleConnectWhatsApp}
-                onRefresh={() => refreshWhatsAppConnection()}
-                onDisconnect={handleDisconnectWhatsApp}
-                onSelectionChange={handleWhatsAppSelectionChange}
-                onSaveSelection={handleSaveWhatsAppSelection}
-                onSendTest={handleSendTestWhatsApp}
-                testForm={testForm}
-                setTestForm={setTestForm}
-              />
-            </div>
-          )}
-        </section>
+          </section>
+        ) : connectionStatusUnavailable ? (
+          <WhatsAppConnectionUnavailable error={whatsappError} onRetry={() => refreshWhatsAppConnection()} loading={whatsappLoading} />
+        ) : !whatsappStatus.connected ? (
+          <>
+            <WhatsAppOnboarding status={whatsappStatus} loading={whatsappLoading} onContinueMeta={handleContinueWithMeta} onManageConnection={() => setShowConnectionPanel(true)} />
+            {showConnectionPanel && renderDeveloperTools()}
+          </>
+        ) : !campaignsUnlocked ? (
+          <>
+            <WhatsAppSetupIncomplete readiness={connectionReadiness} assets={whatsappAssets} selection={whatsappSelection} onManageConnection={() => setShowConnectionPanel(true)} />
+            {showConnectionPanel && renderDeveloperTools()}
+          </>
+        ) : (
+          <>
+            <WhatsAppConnectedBar status={whatsappStatus} assets={whatsappAssets} selection={whatsappSelection} onManageConnection={() => setShowConnectionPanel((current) => !current)} />
+            {showConnectionPanel && renderDeveloperTools()}
 
-        <section>
-          <div>
-            <p className="text-sm font-bold text-[#36A175]">Marketing Creatives / Posters</p>
-            <h2 className="mt-1 text-xl font-black text-slate-950">Poster templates</h2>
-            <p className="mt-1 text-sm text-slate-500">These are share/download creatives, separate from approved WhatsApp message templates.</p>
-          </div>
-        </section>
+            <WhatsAppCampaignBuilder status={whatsappStatus} assets={whatsappAssets} onOpenConnection={() => setShowConnectionPanel((current) => !current)} />
 
-        <section className="space-y-3">
-          <div className="flex gap-2.5 overflow-x-auto pb-1">
-            {whatsappMarketingCategories.map((category) => (
-              <button
-                key={category}
-                type="button"
-                onClick={() => setActiveCategory(category)}
-                className={`h-10 shrink-0 rounded-full px-4 text-sm font-bold transition ${
-                  activeCategory === category ? "bg-[#1A1F71] text-white shadow-sm" : "bg-white text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50"
-                }`}
-              >
-                {category}
-              </button>
-            ))}
-          </div>
+            <section>
+              <div>
+                <p className="text-sm font-bold text-[#36A175]">Marketing Creatives / Posters</p>
+                <h2 className="mt-1 text-xl font-black text-slate-950">Poster templates</h2>
+                <p className="mt-1 text-sm text-slate-500">These are share/download creatives, separate from approved WhatsApp message templates.</p>
+              </div>
+            </section>
 
-          <div className="flex gap-2 overflow-x-auto pb-1">
-            {whatsappMarketingSubcategories.map((subcategory) => (
-              <button
-                key={subcategory}
-                type="button"
-                onClick={() => setActiveSubcategory(subcategory)}
-                className={`h-8 shrink-0 rounded-lg px-3 text-xs font-bold transition ${
-                  activeSubcategory === subcategory ? "bg-[#36A175] text-white shadow-sm" : "bg-white text-slate-500 ring-1 ring-slate-200 hover:bg-slate-50"
-                }`}
-              >
-                {subcategory}
-              </button>
-            ))}
-          </div>
-        </section>
+            <section className="space-y-3">
+              <div className="flex gap-2.5 overflow-x-auto pb-1">
+                {whatsappMarketingCategories.map((category) => (
+                  <button
+                    key={category}
+                    type="button"
+                    onClick={() => setActiveCategory(category)}
+                    className={`h-10 shrink-0 rounded-full px-4 text-sm font-bold transition ${
+                      activeCategory === category ? "bg-[#1A1F71] text-white shadow-sm" : "bg-white text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50"
+                    }`}
+                  >
+                    {category}
+                  </button>
+                ))}
+              </div>
 
-        <section className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
-          {filteredTemplates.map((template) => (
-            <TemplateCard key={template.id} template={template} onSelect={setSelectedTemplate} />
-          ))}
-        </section>
+              <div className="flex gap-2 overflow-x-auto pb-1">
+                {whatsappMarketingSubcategories.map((subcategory) => (
+                  <button
+                    key={subcategory}
+                    type="button"
+                    onClick={() => setActiveSubcategory(subcategory)}
+                    className={`h-8 shrink-0 rounded-lg px-3 text-xs font-bold transition ${
+                      activeSubcategory === subcategory ? "bg-[#36A175] text-white shadow-sm" : "bg-white text-slate-500 ring-1 ring-slate-200 hover:bg-slate-50"
+                    }`}
+                  >
+                    {subcategory}
+                  </button>
+                ))}
+              </div>
+            </section>
+
+            <section className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+              {filteredTemplates.map((template) => (
+                <TemplateCard key={template.id} template={template} onSelect={setSelectedTemplate} />
+              ))}
+            </section>
+          </>
+        )}
       </main>
 
       {selectedTemplate && <PersonalizeModal template={selectedTemplate} onClose={() => setSelectedTemplate(null)} />}
