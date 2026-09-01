@@ -162,6 +162,8 @@ function formatWhatsAppRequestError(error, fallback) {
   const details = error?.payload?.error;
   const message = details?.userMessage || details?.message || error?.payload?.message || error?.message || fallback;
   const metaParts = [
+    error?.status ? `HTTP: ${error.status}` : "",
+    details?.stage ? `Stage: ${details.stage}` : "",
     details?.code ? `Code: ${details.code}` : "",
     details?.subcode ? `Subcode: ${details.subcode}` : "",
     details?.fbtraceId ? `fbtrace_id: ${details.fbtraceId}` : "",

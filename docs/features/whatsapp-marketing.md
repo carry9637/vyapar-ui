@@ -30,7 +30,7 @@ Ready means connected WABA + business phone + approved templates loaded; choosin
 
 - `GET /api/auth/whatsapp/status`: returns connection, assets, selection, readiness, and test-mode availability without auto-connecting test assets.
 - `GET /api/auth/whatsapp`: starts current Meta OAuth dialog using backend config.
-- `POST /api/auth/whatsapp/test-connect`: loads backend Meta test WABA/phone/template assets.
+- `POST /api/auth/whatsapp/test-connect`: explicitly rebuilds backend test setup and returns safe stage diagnostics on failure.
 - `GET /api/whatsapp-business/assets`: refreshes real WABA, phone, and template lists.
 - `POST /api/whatsapp-business/selection`: saves selected WABA, phone number, and approved template in temporary store.
 - `POST /api/whatsapp-business/send-test`: sends one opted-in approved-template message via Cloud API.
@@ -42,6 +42,7 @@ Ready means connected WABA + business phone + approved templates loaded; choosin
 This is not full client Embedded Signup/production onboarding yet; business phone setup and durable tenant storage are pending.
 Developer/Test Tools are behind `Manage Connection` and keep Meta Test Setup plus Single Real Test Send.
 Normal customers are not automatically connected to `WHATSAPP_TEST_*` assets.
+Test setup validates config, WABA, phone, and approved templates before returning `TEST_READY`.
 
 ## What Works
 

@@ -10,16 +10,19 @@ export function isWhatsAppTestConnection(connection = getWhatsAppConnection()) {
   return connection.source === "test_env" && connection.token?.testMode;
 }
 
-export async function ensureWhatsAppTestConnection() {
+export async function ensureWhatsAppTestConnection({ forceRefresh = false } = {}) {
   const config = getWhatsAppOAuthConfig();
   const connection = getWhatsAppConnection();
 
-  if (isWhatsAppTestConnection(connection) && connection.connected && connection.token?.accessToken) {
+  if (!forceRefresh && isWhatsAppTestConnection(connection) && connection.connected && connection.token?.accessToken) {
     return connection;
   }
 
   if (!config.testModeConfigured) {
-    return connection;
+    const error = new Error("WhatsApp test access token, WABA ID, and phone number ID are required.");
+    error.code = "WHATSAPP_TEST_CONFIG_MISSING";
+    error.stage = "CONFIG";
+    throw error;
   }
 
   const assets = await fetchWhatsAppTestAssets(config.testMode.accessToken, {

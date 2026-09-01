@@ -7,19 +7,21 @@ const PHONE_NUMBER_FIELDS = "id,display_phone_number,verified_name,quality_ratin
 const TEMPLATE_FIELDS = "id,name,language,category,status,components";
 const TEMPLATE_COMPONENT_TYPES = new Set(["HEADER", "BODY"]);
 
-function createWhatsAppError(message, code = "WHATSAPP_API_ERROR", meta = null) {
+function createWhatsAppError(message, code = "WHATSAPP_API_ERROR", meta = null, stage = "") {
   const error = new Error(message);
   error.code = code;
   if (meta) error.meta = meta;
+  if (stage) error.stage = stage;
   return error;
 }
 
 export function normalizeWhatsAppError(error, fallback = "WhatsApp request failed") {
   const normalized = normalizeMetaError(error, fallback);
-  const metaCode = String(normalized.code || "");
+  const metaCode = String(error?.metaCode || normalized.code || "");
   const subcode = String(normalized.subcode || "");
   const text = [normalized.type, normalized.userTitle, normalized.userMessage, normalized.message].filter(Boolean).join(" ").toLowerCase();
-  let category = error?.code || "WHATSAPP_API_ERROR";
+  let category = error?.whatsappCategory || error?.code || "WHATSAPP_API_ERROR";
+  let stage = error?.stage || "";
   let message = normalized.message;
   let userTitle = normalized.userTitle;
   let userMessage = normalized.userMessage;
@@ -28,6 +30,7 @@ export function normalizeWhatsAppError(error, fallback = "WhatsApp request faile
     category = error.code;
   } else if (metaCode === "190") {
     category = "TOKEN_EXPIRED";
+    stage = stage || "TOKEN_VALIDATION";
     userTitle = "Reconnect WhatsApp Business";
     message = "WhatsApp token expired or was revoked.";
     userMessage = "Reconnect WhatsApp Business, grant the requested permissions, then try again.";
@@ -57,9 +60,10 @@ export function normalizeWhatsAppError(error, fallback = "WhatsApp request faile
     category,
     message,
     originalMessage: normalized.message,
-    code: normalized.code,
+    code: error?.metaCode || normalized.code,
     subcode: normalized.subcode,
     type: normalized.type,
+    stage,
     userTitle,
     userMessage,
     fbtraceId: normalized.fbtraceId,
@@ -83,6 +87,37 @@ async function fetchAllEdge(path, accessToken, params = {}) {
   }
 
   return records;
+}
+
+function throwStagedWhatsAppError(error, stage, fallback) {
+  const normalized = normalizeWhatsAppError(error, fallback);
+  const staged = new Error(normalized.message || fallback);
+  staged.stage = normalized.stage || stage;
+  staged.whatsappCategory = normalized.category;
+  staged.metaCode = normalized.code;
+  staged.subcode = normalized.subcode;
+  staged.type = normalized.type;
+  staged.userTitle = normalized.userTitle;
+  staged.userMessage = normalized.userMessage;
+  staged.fbtraceId = normalized.fbtraceId;
+  staged.httpStatus = normalized.httpStatus;
+  throw staged;
+}
+
+async function fetchRequiredObject(path, accessToken, params, stage, label) {
+  try {
+    return await graphGet(path, accessToken, params);
+  } catch (error) {
+    throwStagedWhatsAppError(error, stage, `${label} fetch failed`);
+  }
+}
+
+async function fetchRequiredEdge(path, accessToken, params, stage, label) {
+  try {
+    return await fetchAllEdge(path, accessToken, params);
+  } catch (error) {
+    throwStagedWhatsAppError(error, stage, `${label} fetch failed`);
+  }
 }
 
 async function safeFetchEdge(path, accessToken, params, warnings, label) {
@@ -157,20 +192,12 @@ async function fetchBusinessWabas(business, accessToken, warnings, wabasById) {
   clientWabas.map((waba) => normalizeWaba(waba, business, "client")).forEach((waba) => addUniqueById(wabasById, waba));
 }
 
-async function fetchConfiguredPhoneNumber(accessToken, phoneNumberId, selectedWabaId, warnings) {
+async function fetchRequiredConfiguredPhoneNumber(accessToken, phoneNumberId, selectedWabaId) {
   try {
     const phone = await graphGet(`/${phoneNumberId}`, accessToken, { fields: PHONE_NUMBER_FIELDS });
     return normalizePhoneNumber(phone, selectedWabaId);
   } catch (error) {
-    const normalized = normalizeWhatsAppError(error, "Configured WhatsApp test phone number fetch failed");
-    warnings.push({
-      area: "configured test phone number",
-      category: normalized.category,
-      message: normalized.message,
-      code: normalized.code,
-      subcode: normalized.subcode,
-    });
-    return null;
+    throwStagedWhatsAppError(error, "PHONE_FETCH", "Configured WhatsApp test phone number fetch failed");
   }
 }
 
@@ -226,21 +253,28 @@ export async function fetchWhatsAppTestAssets(accessToken, options = {}) {
   const businessName = options.businessName || "Meta Test Business";
 
   if (!accessToken || !selectedWabaId || !selectedPhoneNumberId) {
-    throw createWhatsAppError("WhatsApp test access token, WABA ID, and phone number ID are required.", "WHATSAPP_TEST_CONFIG_MISSING");
+    throw createWhatsAppError("WhatsApp test access token, WABA ID, and phone number ID are required.", "WHATSAPP_TEST_CONFIG_MISSING", null, "CONFIG");
   }
 
-  const waba = normalizeWaba(await graphGet(`/${selectedWabaId}`, accessToken, { fields: WABA_FIELDS }), businessId ? { id: businessId, name: businessName } : null, "test");
+  const waba = normalizeWaba(
+    await fetchRequiredObject(`/${selectedWabaId}`, accessToken, { fields: WABA_FIELDS }, "WABA_FETCH", "Configured WhatsApp test WABA"),
+    businessId ? { id: businessId, name: businessName } : null,
+    "test",
+  );
   const discoveredPhoneNumbers = (
-    await safeFetchEdge(`/${selectedWabaId}/phone_numbers`, accessToken, { fields: PHONE_NUMBER_FIELDS }, warnings, `${waba.name || selectedWabaId} phone numbers`)
+    await fetchRequiredEdge(`/${selectedWabaId}/phone_numbers`, accessToken, { fields: PHONE_NUMBER_FIELDS }, "PHONE_FETCH", `${waba.name || selectedWabaId} phone numbers`)
   ).map((phone) => normalizePhoneNumber(phone, selectedWabaId));
-  const configuredPhoneNumber = discoveredPhoneNumbers.find((phone) => phone.id === selectedPhoneNumberId) || (await fetchConfiguredPhoneNumber(accessToken, selectedPhoneNumberId, selectedWabaId, warnings));
+  const configuredPhoneNumber = discoveredPhoneNumbers.find((phone) => phone.id === selectedPhoneNumberId) || (await fetchRequiredConfiguredPhoneNumber(accessToken, selectedPhoneNumberId, selectedWabaId));
   const phoneNumbersById = new Map();
   discoveredPhoneNumbers.forEach((phone) => addUniqueById(phoneNumbersById, phone));
   addUniqueById(phoneNumbersById, configuredPhoneNumber);
 
   const templates = (
-    await safeFetchEdge(`/${selectedWabaId}/message_templates`, accessToken, { fields: TEMPLATE_FIELDS, limit: 100 }, warnings, `${waba.name || selectedWabaId} message templates`)
+    await fetchRequiredEdge(`/${selectedWabaId}/message_templates`, accessToken, { fields: TEMPLATE_FIELDS, limit: 100 }, "TEMPLATE_FETCH", `${waba.name || selectedWabaId} message templates`)
   ).map((template) => normalizeTemplate(template, selectedWabaId));
+  if (!templates.some((template) => template.status === "APPROVED")) {
+    throw createWhatsAppError("No approved WhatsApp message template found for the configured test WABA.", "TEMPLATE_NOT_APPROVED", null, "TEMPLATE_FETCH");
+  }
 
   return {
     businesses: businessId ? [{ id: businessId, name: businessName, verificationStatus: "" }] : [],

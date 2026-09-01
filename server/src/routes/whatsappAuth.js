@@ -66,24 +66,45 @@ router.get("/whatsapp", (req, res) => {
 });
 
 router.post("/whatsapp/test-connect", async (_req, res) => {
+  const config = getWhatsAppOAuthConfig();
   try {
-    await ensureWhatsAppTestConnection();
+    await ensureWhatsAppTestConnection({ forceRefresh: true });
+    const publicConnection = getWhatsAppPublicConnection();
     return res.json({
       success: true,
-      configured: true,
-      oauthConfigured: getWhatsAppOAuthConfig().oauthConfigured,
-      testModeConfigured: true,
+      configured: config.configured,
+      oauthConfigured: config.oauthConfigured,
+      testModeConfigured: config.testModeConfigured,
+      testConnectionState: publicConnection.readiness?.readyToSend ? "TEST_READY" : "TEST_INCOMPLETE",
       message: "WhatsApp test setup connected.",
-      ...getWhatsAppPublicConnection(),
+      ...publicConnection,
     });
   } catch (error) {
-    const normalized = normalizeWhatsAppError(error, "Unable to connect WhatsApp test setup");
+    let normalized;
+    try {
+      normalized = normalizeWhatsAppError(error, "Unable to connect WhatsApp test setup");
+    } catch {
+      normalized = {
+        category: "WHATSAPP_API_ERROR",
+        message: "Unable to connect WhatsApp test setup.",
+        stage: "TOKEN_VALIDATION",
+      };
+    }
+    console.error("WhatsApp test setup failed", {
+      stage: normalized.stage || "UNKNOWN",
+      category: normalized.category,
+      httpStatus: normalized.httpStatus || "",
+      code: normalized.code || "",
+      subcode: normalized.subcode || "",
+      fbtraceId: normalized.fbtraceId || "",
+    });
     setWhatsAppConnectionError(normalized.message);
-    return res.status(502).json({
+    const status = normalized.stage === "CONFIG" || normalized.category === "WHATSAPP_TEST_CONFIG_MISSING" ? 400 : normalized.category === "TOKEN_EXPIRED" ? 401 : 502;
+    return res.status(status).json({
       success: false,
-      configured: getWhatsAppOAuthConfig().configured,
-      oauthConfigured: getWhatsAppOAuthConfig().oauthConfigured,
-      testModeConfigured: getWhatsAppOAuthConfig().testModeConfigured,
+      configured: config.configured,
+      oauthConfigured: config.oauthConfigured,
+      testModeConfigured: config.testModeConfigured,
       message: normalized.message,
       error: normalized,
       ...getWhatsAppPublicConnection(),
