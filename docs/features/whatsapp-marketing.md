@@ -23,6 +23,7 @@ Ledgerly -> WhatsApp Marketing -> Continue with Meta -> Meta Embedded Signup -> 
 Backend then discovers WABA + Phone Number ID + approved templates, marks the connection READY, and unlocks the campaign builder.
 Production Embedded Signup is currently blocked by Meta/Facebook "Feature unavailable" and Meta verification/review/configuration remains pending.
 Do not describe production onboarding as completed yet.
+Production onboarding errors are shown as warnings and do not block Developer/Test Mode verification.
 
 ## Where Customer Numbers Will Come From
 

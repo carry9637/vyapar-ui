@@ -360,7 +360,7 @@ function WhatsAppConnectionUnavailable({ error, onRetry, loading }) {
   );
 }
 
-function WhatsAppOnboarding({ status, loading, onContinueMeta }) {
+function WhatsAppOnboarding({ status, loading, onContinueMeta, productionConnectionError }) {
   const canUseMeta = Boolean(status.embeddedSignupConfigured || status.oauthConfigured);
   return (
     <section className="grid min-h-[460px] place-items-center rounded-2xl border border-slate-200 bg-white p-6 text-center shadow-sm">
@@ -374,6 +374,12 @@ function WhatsAppOnboarding({ status, loading, onContinueMeta }) {
           Connect your business WhatsApp account to create and send campaigns to your customers.
         </p>
         <p className="mt-2 text-xs font-bold text-slate-400">You'll securely connect your WhatsApp Business account through Meta.</p>
+        {productionConnectionError && (
+          <div className="mt-4 rounded-lg border border-amber-100 bg-amber-50 p-3 text-left text-xs font-bold leading-5 text-amber-800">
+            <p className="font-black">Production connection unavailable</p>
+            <p className="mt-1">{productionConnectionError}</p>
+          </div>
+        )}
         {!canUseMeta && (
           <p className="mt-4 rounded-lg bg-amber-50 p-3 text-xs font-bold leading-5 text-amber-800">
             Production Meta onboarding is not configured yet. Use Developer/Test Mode below only for development test setup.
@@ -1755,6 +1761,7 @@ function WhatsAppMarketing() {
   const [whatsappToast, setWhatsAppToast] = useState(callbackNotice.toast);
   const [showConnectionPanel, setShowConnectionPanel] = useState(Boolean(callbackNotice.error));
   const [connectionStatusUnavailable, setConnectionStatusUnavailable] = useState(false);
+  const [productionConnectionError, setProductionConnectionError] = useState(callbackNotice.error);
   const [testForm, setTestForm] = useState({ countryCode: "+91", phoneNumber: "", optInConfirmed: false, variables: {} });
   const [sendState, setSendState] = useState({ loading: false, success: false, message: "", messageId: "" });
 
@@ -1811,6 +1818,7 @@ function WhatsAppMarketing() {
   async function refreshWhatsAppConnection(selection = whatsappSelection) {
     setWhatsAppLoading(true);
     setWhatsAppError("");
+    setProductionConnectionError("");
     setConnectionStatusUnavailable(false);
 
     try {
@@ -1844,6 +1852,7 @@ function WhatsAppMarketing() {
   async function handleContinueWithMeta() {
     setWhatsAppLoading(true);
     setWhatsAppError("");
+    setProductionConnectionError("");
     setConnectionStatusUnavailable(false);
 
     try {
@@ -1852,8 +1861,7 @@ function WhatsAppMarketing() {
         setWhatsAppStatus({ ...status, loading: false });
         setWhatsAppAssets(status.assets || emptyWhatsAppAssets());
         setWhatsAppSelection(status.selection || emptyWhatsAppSelection());
-        setWhatsAppError("Production Meta WhatsApp onboarding is not configured on the backend.");
-        setShowConnectionPanel(true);
+        setProductionConnectionError("Production Meta WhatsApp onboarding is not configured on the backend.");
         setWhatsAppLoading(false);
         return;
       }
@@ -1871,21 +1879,25 @@ function WhatsAppMarketing() {
 
       startWhatsAppConnection();
     } catch (requestError) {
+      const isApiError = Boolean(requestError.payload);
       const expectedConnectionState = isWhatsAppAuthOrDisconnectedError(requestError) || isWhatsAppConfigError(requestError);
-      setConnectionStatusUnavailable(!expectedConnectionState);
+      setConnectionStatusUnavailable(isApiError && !expectedConnectionState);
       if (requestError.payload) {
         setWhatsAppStatus({ ...requestError.payload, loading: false });
         setWhatsAppAssets(requestError.payload.assets || emptyWhatsAppAssets());
         setWhatsAppSelection(requestError.payload.selection || emptyWhatsAppSelection());
       }
       setWhatsAppLoading(false);
-      setWhatsAppError(formatWhatsAppRequestError(requestError, "Unable to start WhatsApp Business connection."));
+      const formattedError = formatWhatsAppRequestError(requestError, "Unable to start WhatsApp Business connection.");
+      setProductionConnectionError(formattedError);
+      setWhatsAppError(isApiError ? formattedError : "");
     }
   }
 
   async function handleConnectWhatsAppTestMode() {
     setWhatsAppLoading(true);
     setWhatsAppError("");
+    setProductionConnectionError("");
     setConnectionStatusUnavailable(false);
 
     try {
@@ -2106,8 +2118,8 @@ function WhatsAppMarketing() {
           </>
         ) : !whatsappStatus.connected ? (
           <>
-            <WhatsAppOnboarding status={whatsappStatus} loading={whatsappLoading} onContinueMeta={handleContinueWithMeta} />
-            <WhatsAppTestModeStarter status={whatsappStatus} loading={whatsappLoading} error={whatsappError} onTestConnect={handleConnectWhatsAppTestMode} />
+            <WhatsAppOnboarding status={whatsappStatus} loading={whatsappLoading} onContinueMeta={handleContinueWithMeta} productionConnectionError={productionConnectionError} />
+            {whatsappStatus.testModeConfigured && <WhatsAppTestModeStarter status={whatsappStatus} loading={whatsappLoading} error={whatsappError} onTestConnect={handleConnectWhatsAppTestMode} />}
             {showConnectionPanel && renderDeveloperTools()}
           </>
         ) : !campaignsUnlocked ? (
