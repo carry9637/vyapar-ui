@@ -376,7 +376,7 @@ function WhatsAppOnboarding({ status, loading, onContinueMeta }) {
         <p className="mt-2 text-xs font-bold text-slate-400">You'll securely connect your WhatsApp Business account through Meta.</p>
         {!canUseMeta && (
           <p className="mt-4 rounded-lg bg-amber-50 p-3 text-xs font-bold leading-5 text-amber-800">
-            Production Meta onboarding is not configured yet. Use Manage Connection only for developer test setup.
+            Production Meta onboarding is not configured yet. Use Developer/Test Mode below only for development test setup.
           </p>
         )}
         <div className="mt-6 flex justify-center">
@@ -386,6 +386,38 @@ function WhatsAppOnboarding({ status, loading, onContinueMeta }) {
           </button>
         </div>
       </div>
+    </section>
+  );
+}
+
+function WhatsAppTestModeStarter({ status, loading, error, onTestConnect }) {
+  const testModeConfigured = Boolean(status.testModeConfigured);
+  return (
+    <section className="rounded-2xl border border-dashed border-amber-200 bg-white p-5 shadow-sm">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+        <div>
+          <p className="text-xs font-black uppercase tracking-wide text-amber-700">Developer / Test Mode</p>
+          <h2 className="mt-1 text-lg font-black text-slate-950">Use Meta Test WhatsApp Account</h2>
+          <p className="mt-1 max-w-2xl text-sm font-semibold leading-6 text-slate-500">
+            Development-only Cloud API setup for validating one real approved-template message with backend env assets.
+          </p>
+        </div>
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <span className={`rounded-full px-3 py-1 text-xs font-black ${testModeConfigured ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-500"}`}>
+            {testModeConfigured ? "Backend test setup ready" : "Test env not configured"}
+          </span>
+          <button type="button" onClick={onTestConnect} disabled={loading || !testModeConfigured} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 text-sm font-black text-amber-800 hover:bg-amber-100 disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400">
+            <FiShield />
+            Use Meta Test WhatsApp Account
+          </button>
+        </div>
+      </div>
+      {error && (
+        <div className="mt-4 flex gap-2 rounded-lg border border-rose-100 bg-rose-50 p-3 text-xs font-bold leading-5 text-rose-700">
+          <FiAlertCircle className="mt-0.5 shrink-0" />
+          <span>{error}</span>
+        </div>
+      )}
     </section>
   );
 }
@@ -2073,7 +2105,11 @@ function WhatsAppMarketing() {
             {showConnectionPanel && renderDeveloperTools()}
           </>
         ) : !whatsappStatus.connected ? (
-          <WhatsAppOnboarding status={whatsappStatus} loading={whatsappLoading} onContinueMeta={handleContinueWithMeta} />
+          <>
+            <WhatsAppOnboarding status={whatsappStatus} loading={whatsappLoading} onContinueMeta={handleContinueWithMeta} />
+            <WhatsAppTestModeStarter status={whatsappStatus} loading={whatsappLoading} error={whatsappError} onTestConnect={handleConnectWhatsAppTestMode} />
+            {showConnectionPanel && renderDeveloperTools()}
+          </>
         ) : !campaignsUnlocked ? (
           <>
             <WhatsAppSetupIncomplete readiness={connectionReadiness} assets={whatsappAssets} selection={whatsappSelection} onManageConnection={() => setShowConnectionPanel(true)} />

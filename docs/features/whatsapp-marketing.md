@@ -1,64 +1,84 @@
 # WhatsApp Marketing
 
-## Purpose
+## Feature Goal
 
-WhatsApp Marketing combines poster creatives with an official WhatsApp Business connection foundation.
-The current product UX is connection-first: campaigns unlock only after the backend confirms WABA, phone number, and approved templates.
-Real bulk sending still needs SQL persistence and a queue worker.
+Business owners can send festival greetings, offers, discounts, announcements, and promotional campaigns to their own customers through WhatsApp.
+Example: Business -> Diwali poster -> "20% OFF this weekend" -> select customers -> send WhatsApp campaign.
 
-## Current User Flow
+## Architecture
 
-Open WhatsApp Marketing -> backend status check.
-If unavailable: show retry-only connection error.
-If not connected: show onboarding only with the main `Continue with Meta` action, which starts Meta WhatsApp Embedded Signup when configured.
-If connected but incomplete: show setup incomplete and keep campaign builder locked.
-If ready: show compact connected bar -> Creative -> Recipients -> Message -> Preview -> Send.
-Ready means connected WABA + business phone + approved templates loaded; choosing a specific template happens in the Message step.
+Frontend React -> Ledgerly Node/Express API -> Meta WhatsApp Cloud API -> Customer WhatsApp.
+React must not call Meta directly and must not loop through bulk recipients itself.
+Bulk production sending belongs in backend persistence plus a controlled queue/worker.
 
-## Files Involved
+## Current Development Flow
 
-- `src/pages/BusinessGrowth/WhatsAppMarketing.jsx`: poster gallery, connection-first gating, campaign wizard, developer/test tools.
-- `src/services/whatsappBusinessService.js`: frontend client for status, OAuth start, assets, selection, disconnect, and test send.
-- `server/src/routes/whatsappAuth.js`: WhatsApp OAuth start/callback/status/disconnect and test env connect.
-- `server/src/routes/whatsappBusiness.js`: asset/template loading, selection save, and one real test send.
-- `server/src/routes/whatsappWebhook.js`: production webhook verification and event receiver foundation.
-- `server/src/services/whatsappBusinessService.js`: Graph API WABA/phone/template fetch and `/messages` send.
-- `server/src/services/whatsappConnectionStore.js`: temporary in-memory connection/selection/readiness interface.
-- `server/src/services/whatsappTestModeService.js`: rebuilds test connection from backend env without exposing tokens.
+Ledgerly -> Developer/Test Mode -> Meta Test WABA -> approved template -> one authorized recipient.
+Implemented/testing path: `POST /api/whatsapp-business/send-test` -> `sendWhatsAppTemplateMessage()` -> Meta `POST /{phone_number_id}/messages`.
+The backend reconstructs test mode from `WHATSAPP_TEST_ACCESS_TOKEN`, `WHATSAPP_TEST_WABA_ID`, and `WHATSAPP_TEST_PHONE_NUMBER_ID`; tokens are never returned to React.
 
-## APIs
+## Production Connection Flow
 
-- `GET /api/auth/whatsapp/status`: returns connection, assets, selection, readiness, and test-mode availability without auto-connecting test assets.
-- `GET /api/auth/whatsapp`: legacy redirect OAuth fallback using backend config.
-- `POST /api/auth/whatsapp/embedded-signup`: exchanges Embedded Signup code, stores the server-side token, and hydrates WABA/phone/template assets.
-- `POST /api/auth/whatsapp/test-connect`: explicitly rebuilds backend test setup and returns safe stage diagnostics on failure.
-- `GET /api/whatsapp-business/assets`: refreshes real WABA, phone, and template lists.
-- `POST /api/whatsapp-business/selection`: saves selected WABA, phone number, and approved template in temporary store.
-- `POST /api/whatsapp-business/send-test`: sends one opted-in approved-template message via Cloud API.
-- `GET/POST /api/whatsapp/webhook`: webhook verification and future status event intake.
+Ledgerly -> WhatsApp Marketing -> Continue with Meta -> Meta Embedded Signup -> business authenticates -> connects WhatsApp Business Account -> sender business phone is connected/verified.
+Backend then discovers WABA + Phone Number ID + approved templates, marks the connection READY, and unlocks the campaign builder.
+Production Embedded Signup is currently blocked by Meta/Facebook "Feature unavailable" and Meta verification/review/configuration remains pending.
+Do not describe production onboarding as completed yet.
 
-## Test vs Production Connection
+## Where Customer Numbers Will Come From
 
-`Continue with Meta` now uses the Facebook JS SDK Embedded Signup flow when `WHATSAPP_LOGIN_CONFIG_ID` is configured, then completes via the backend.
-Production still needs correct Meta Dashboard Embedded Signup configuration, approved permissions, production phone setup, and durable tenant storage.
-Developer/Test Tools are behind `Manage Connection` and keep Meta Test Setup plus Single Real Test Send.
-Developer/Test Tools are not shown in the normal first-time onboarding path.
-Normal customers are not automatically connected to `WHATSAPP_TEST_*` assets.
-Test setup validates config, WABA, phone, and approved templates before returning `TEST_READY`.
+Meta does not provide the business's customer list.
+Customer numbers will belong to the Ledgerly business and should come from Ledgerly customer/contact data.
+Planned sources: existing Ledgerly Customers/Parties, Add Customer/Contact, and later CSV/Excel import.
+Example: Rahul | 987xxxxxxx, Priya | 982xxxxxxx, Amit | 976xxxxxxx.
+These contacts will be stored in the common Ledgerly SQL database later, not inside Meta.
 
-## What Works
+## Planned Campaign Flow
 
-Poster personalization, download, browser share, and manual `wa.me` fallback remain preserved.
-Backend-only Graph API calls can fetch real test WABA assets/templates and send one approved-template test message.
-Campaign builder UI uses selected creative, recipient state, friendly template choices, variables, and preview, but bulk send is blocked.
+Poster/Creative -> Select Customers -> Message/approved WhatsApp template -> Preview -> Send.
+Recipients UI should support search, checkbox selection, Select All, groups/filters, and selected count.
+Business owners should select saved customers, not type 100 numbers for every campaign.
 
-## Pending
+## Planned Bulk Backend Flow
 
-Production business phone rollout, PostgreSQL storage, contacts/consent, media upload for poster templates, queue-based bulk sending, retries/idempotency, webhook status persistence, analytics, and tenant isolation.
+User clicks Send Campaign once.
+Ledgerly backend creates Campaign -> selected recipients -> message jobs/queue.
+A worker sends through Meta WhatsApp Cloud API and stores per-recipient status.
+Statuses later move from pending -> sent -> delivered -> read, or failed.
+Webhooks will update delivery statuses.
+Frontend does not open 100 `wa.me` links and does not call Meta 100 times.
 
-## Manager Summary
+## WhatsApp Template Requirement
 
-User pehle WhatsApp Business connect karega, tabhi campaign tools unlock honge.
-Connected business phone aur approved templates backend se confirm hone ke baad hi campaign builder dikhega.
-Test setup ab normal customer screen par nahi hai; Manage Connection ke andar Developer/Test Tools me hai.
-Abhi one real approved-template test send possible hai, bulk campaign sending next backend phase hai.
+Business-initiated promotional campaigns must follow WhatsApp Business Platform rules and use approved templates where required.
+Poster/media campaigns will need a suitable approved media/image-header template and real media handling.
+Do not implement fake arbitrary bulk free-text sending.
+
+## Implemented API
+
+REAL / CURRENT: `POST /api/whatsapp-business/send-test`
+Purpose: send one real approved-template WhatsApp test message to an opted-in or authorized test recipient.
+Function chain: `WhatsAppMarketing.jsx` -> `src/services/whatsappBusinessService.js` -> `server/src/routes/whatsappBusiness.js` -> `sendWhatsAppTemplateMessage()` -> Meta `/{phone_number_id}/messages`.
+
+## Future / NOT IMPLEMENTED
+
+[ ] Common PostgreSQL persistence
+[ ] Customer/contact database integration
+[ ] CSV/Excel customer import
+[ ] Campaign persistence
+[ ] Campaign recipient table
+[ ] Queue/worker
+[ ] Bulk sending
+[ ] Retry/idempotency
+[ ] Consent/opt-out persistence
+[ ] Meta message ID persistence
+[ ] Webhook delivery/read/failed persistence
+[ ] Campaign analytics
+[ ] Production Embedded Signup completion
+
+## Manager Explanation
+
+WhatsApp Marketing lets a business send offers, festival greetings, and promotional campaigns to its customers.
+Customer numbers will come from Ledgerly's customer/contact database or future CSV/Excel imports, not from Meta.
+The business selects customers once and clicks Send Campaign.
+The backend will later create controlled message jobs and send them through Meta WhatsApp Cloud API.
+Currently we are first validating one real message end-to-end before implementing SQL and bulk campaign infrastructure.
