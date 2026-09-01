@@ -360,7 +360,7 @@ function WhatsAppConnectionUnavailable({ error, onRetry, loading }) {
   );
 }
 
-function WhatsAppOnboarding({ status, loading, onContinueMeta, onManageConnection }) {
+function WhatsAppOnboarding({ status, loading, onContinueMeta }) {
   const canUseMeta = Boolean(status.embeddedSignupConfigured || status.oauthConfigured);
   return (
     <section className="grid min-h-[460px] place-items-center rounded-2xl border border-slate-200 bg-white p-6 text-center shadow-sm">
@@ -379,14 +379,10 @@ function WhatsAppOnboarding({ status, loading, onContinueMeta, onManageConnectio
             Production Meta onboarding is not configured yet. Use Manage Connection only for developer test setup.
           </p>
         )}
-        <div className="mt-6 flex flex-col justify-center gap-3 sm:flex-row">
+        <div className="mt-6 flex justify-center">
           <button type="button" onClick={onContinueMeta} disabled={loading || !canUseMeta} className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-[#1A1F71] px-5 text-sm font-black text-white hover:bg-[#14185a] disabled:bg-slate-300">
             <FiZap />
             Continue with Meta
-          </button>
-          <button type="button" onClick={onManageConnection} className="inline-flex h-11 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-5 text-sm font-black text-slate-700 hover:bg-slate-50">
-            <FiShield />
-            Manage Connection
           </button>
         </div>
       </div>
@@ -2077,10 +2073,7 @@ function WhatsAppMarketing() {
             {showConnectionPanel && renderDeveloperTools()}
           </>
         ) : !whatsappStatus.connected ? (
-          <>
-            <WhatsAppOnboarding status={whatsappStatus} loading={whatsappLoading} onContinueMeta={handleContinueWithMeta} onManageConnection={() => setShowConnectionPanel(true)} />
-            {showConnectionPanel && renderDeveloperTools()}
-          </>
+          <WhatsAppOnboarding status={whatsappStatus} loading={whatsappLoading} onContinueMeta={handleContinueWithMeta} />
         ) : !campaignsUnlocked ? (
           <>
             <WhatsAppSetupIncomplete readiness={connectionReadiness} assets={whatsappAssets} selection={whatsappSelection} onManageConnection={() => setShowConnectionPanel(true)} />

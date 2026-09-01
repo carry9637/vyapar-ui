@@ -10,7 +10,7 @@ Real bulk sending still needs SQL persistence and a queue worker.
 
 Open WhatsApp Marketing -> backend status check.
 If unavailable: show retry-only connection error.
-If not connected: show onboarding only with `Continue with Meta`, which starts Meta WhatsApp Embedded Signup when configured.
+If not connected: show onboarding only with the main `Continue with Meta` action, which starts Meta WhatsApp Embedded Signup when configured.
 If connected but incomplete: show setup incomplete and keep campaign builder locked.
 If ready: show compact connected bar -> Creative -> Recipients -> Message -> Preview -> Send.
 Ready means connected WABA + business phone + approved templates loaded; choosing a specific template happens in the Message step.
@@ -42,6 +42,7 @@ Ready means connected WABA + business phone + approved templates loaded; choosin
 `Continue with Meta` now uses the Facebook JS SDK Embedded Signup flow when `WHATSAPP_LOGIN_CONFIG_ID` is configured, then completes via the backend.
 Production still needs correct Meta Dashboard Embedded Signup configuration, approved permissions, production phone setup, and durable tenant storage.
 Developer/Test Tools are behind `Manage Connection` and keep Meta Test Setup plus Single Real Test Send.
+Developer/Test Tools are not shown in the normal first-time onboarding path.
 Normal customers are not automatically connected to `WHATSAPP_TEST_*` assets.
 Test setup validates config, WABA, phone, and approved templates before returning `TEST_READY`.
 
