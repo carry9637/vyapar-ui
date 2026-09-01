@@ -2,7 +2,7 @@
 
 ## Purpose
 
-WhatsApp Marketing now has two clear areas: poster creatives and official WhatsApp Business test messaging.
+WhatsApp Marketing now has three clear areas: campaign creation, poster creatives, and official WhatsApp Business test messaging.
 The poster gallery still supports local personalization, PNG download, browser share, and manual `wa.me` sharing.
 Phase 1 adds real Meta WhatsApp Business Platform foundation for one approved-template test send only.
 
@@ -11,6 +11,7 @@ Phase 1 adds real Meta WhatsApp Business Platform foundation for one approved-te
 Frontend: `WhatsAppMarketing.jsx` -> `src/services/whatsappBusinessService.js`.
 Backend: `/api/auth/whatsapp`, `/api/whatsapp-business/*`, `/api/whatsapp/webhook`.
 Graph API calls stay backend-only; tokens and App Secret are never exposed to Vite.
+The campaign builder is UI/UX only until SQL recipients and a queue worker are added.
 
 ## Files Created
 
@@ -25,7 +26,7 @@ Graph API calls stay backend-only; tokens and App Secret are never exposed to Vi
 
 ## Files Changed
 
-- `src/pages/BusinessGrowth/WhatsAppMarketing.jsx`: added WhatsApp Business panel; poster UI preserved.
+- `src/pages/BusinessGrowth/WhatsAppMarketing.jsx`: added campaign wizard and secondary Connection/Test panel; poster UI preserved.
 - `server/src/index.js`: mounted WhatsApp auth/business/webhook routes.
 - `server/.env.example`: added WhatsApp OAuth/webhook env placeholders.
 
@@ -34,6 +35,10 @@ Graph API calls stay backend-only; tokens and App Secret are never exposed to Vi
 Connect WhatsApp Business -> Meta OAuth -> fetch businesses/WABAs -> select WABA -> fetch phone numbers/templates -> select phone number and approved template -> confirm opted-in test recipient -> send one real template message through `/{phone-number-id}/messages`.
 
 Current testing can also use backend env test mode: load configured test WABA/phone IDs -> fetch real templates -> select approved template -> send one opted-in test message.
+
+Product UX: Create Campaign -> Creative -> Recipients -> Message -> Preview -> Send. Send/Schedule is blocked until SQL/queue work exists.
+Message step uses friendly approved-template choices; raw Meta template names are secondary details only.
+Poster delivery requires an approved image-header template plus future media upload/job handling.
 
 ## Environment / Meta Setup
 
@@ -52,11 +57,12 @@ Status/save/send routes rebuild the test-mode connection from env, so reloads or
 
 ## Phase 2+
 
-Add Embedded Signup/client OAuth, SQL persistence, real production phone numbers, contact import/selection, consent/opt-out records, template creation/submission, queued bulk sending, retries, message status webhooks, analytics, and tenant isolation.
+Add Embedded Signup/client OAuth, SQL persistence, real production phone numbers, contact import/selection, consent/opt-out records, template creation/submission, media upload for poster templates, queued bulk sending, retries, message status webhooks, analytics, and tenant isolation.
 
 ## Manager Summary
 
 The existing poster creator remains intact.
+The main page now starts with a customer-style campaign wizard.
 The new panel can use backend test credentials to send one real approved-template message through WhatsApp Cloud API.
 OAuth remains prepared for later client onboarding but is not required for current Meta test-number development.
 Bulk marketing is intentionally not implemented yet.

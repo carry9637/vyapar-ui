@@ -14,6 +14,7 @@ import {
   FiShield,
   FiUpload,
   FiUser,
+  FiUsers,
   FiX,
   FiZap,
 } from "react-icons/fi";
@@ -166,6 +167,63 @@ function formatWhatsAppRequestError(error, fallback) {
     details?.fbtraceId ? `fbtrace_id: ${details.fbtraceId}` : "",
   ].filter(Boolean);
   return metaParts.length ? `${message} (${metaParts.join(", ")})` : message;
+}
+
+function safeParseJson(value, fallback) {
+  try {
+    return JSON.parse(value) || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function normalizePartyRecipient(record = {}, index = 0) {
+  const name = record.partyName || record.name || record.customerName || record.displayName || "";
+  const phone = record.phone || record.mobile || record.mobileNumber || record.contactNumber || "";
+  if (!phone) return null;
+  return {
+    id: record.id || record.partyId || `party-${index}-${phone}`,
+    name: name || phone,
+    phone: String(phone),
+    source: "party",
+    optedIn: Boolean(record.whatsappOptIn || record.optedIn || record.consent?.whatsapp),
+  };
+}
+
+function loadPartyRecipients() {
+  if (typeof window === "undefined" || !window.localStorage) return [];
+  const storageKeys = ["ledgerly:parties", "vyapar:parties", "parties", "ledgerly:customers", "vyapar:customers"];
+  const byId = new Map();
+
+  storageKeys.forEach((key) => {
+    const records = safeParseJson(window.localStorage.getItem(key), []);
+    if (!Array.isArray(records)) return;
+    records.map(normalizePartyRecipient).filter(Boolean).forEach((recipient) => byId.set(recipient.id, recipient));
+  });
+
+  return Array.from(byId.values());
+}
+
+function templateHeaderFormat(template = {}) {
+  const header = (template.components || []).find((component) => String(component.type || "").toUpperCase() === "HEADER");
+  return String(header?.format || "").toUpperCase();
+}
+
+function templateBodyText(template = {}) {
+  return (template.components || []).find((component) => String(component.type || "").toUpperCase() === "BODY")?.text || "";
+}
+
+function templateFriendlyName(template = {}) {
+  const headerFormat = templateHeaderFormat(template);
+  const channel = headerFormat === "IMAGE" ? "Poster image message" : headerFormat ? `${headerFormat.toLowerCase()} message` : "Text message";
+  const category = template.category ? `${template.category.toLowerCase()} template` : "approved template";
+  return `${channel} - ${category}`;
+}
+
+function renderTemplateMessage(template = {}, variables = {}, fallbackMessage = "") {
+  const body = templateBodyText(template);
+  if (!body) return fallbackMessage;
+  return body.replace(/\{\{(\d+)\}\}/g, (_match, index) => variables[`body:${index}`] || `[${index}]`);
 }
 
 function extractTemplateVariables(template = {}) {
@@ -576,6 +634,367 @@ function templateStatusClass(status) {
   if (status === "REJECTED") return "bg-rose-50 text-rose-700";
   if (status === "PAUSED" || status === "DISABLED") return "bg-slate-100 text-slate-600";
   return "bg-amber-50 text-amber-700";
+}
+
+const campaignSteps = ["Creative", "Recipients", "Message", "Preview", "Send"];
+
+function CampaignStepButton({ index, label, activeStep, onSelect }) {
+  const active = activeStep === index;
+  const complete = activeStep > index;
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect(index)}
+      className={`flex min-w-[120px] flex-1 items-center gap-2 rounded-xl border px-3 py-2 text-left text-xs font-black transition ${
+        active ? "border-[#1A1F71] bg-[#1A1F71] text-white" : complete ? "border-emerald-100 bg-emerald-50 text-emerald-700" : "border-slate-200 bg-white text-slate-500"
+      }`}
+    >
+      <span className={`grid h-6 w-6 shrink-0 place-items-center rounded-full ${active ? "bg-white/15" : complete ? "bg-white text-emerald-700" : "bg-slate-100 text-slate-500"}`}>{index + 1}</span>
+      {label}
+    </button>
+  );
+}
+
+function CampaignCreativeStep({ selectedPoster, onSelectPoster }) {
+  return (
+    <div className="space-y-4">
+      <div>
+        <h3 className="text-base font-black text-slate-950">Choose poster</h3>
+        <p className="mt-1 text-sm font-semibold text-slate-500">Use one of the existing WhatsApp Marketing creatives.</p>
+      </div>
+      <div className="grid max-h-[470px] gap-4 overflow-y-auto pr-1 sm:grid-cols-2 xl:grid-cols-3">
+        {whatsappMarketingTemplates.map((template) => {
+          const active = selectedPoster?.id === template.id;
+          return (
+            <button
+              key={template.id}
+              type="button"
+              onClick={() => onSelectPoster(template)}
+              className={`overflow-hidden rounded-xl border bg-white text-left shadow-sm transition hover:border-[#36A175] ${active ? "border-[#36A175] ring-2 ring-[#36A175]/15" : "border-slate-200"}`}
+            >
+              <div className="flex h-52 items-center justify-center bg-slate-50 p-3">
+                <img src={template.image} alt={template.title} className="max-h-full max-w-full rounded-lg object-contain" />
+              </div>
+              <div className="p-3">
+                <p className="text-sm font-black text-slate-950">{template.title}</p>
+                <p className="mt-1 text-xs font-bold text-slate-500">{template.subcategory} poster</p>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function CampaignRecipientsStep({ partyRecipients, selectedRecipients, setSelectedRecipients, recipientQuery, setRecipientQuery, manualRecipient, setManualRecipient, consentConfirmed, setConsentConfirmed }) {
+  const query = recipientQuery.trim().toLowerCase();
+  const filteredParties = partyRecipients.filter((recipient) => `${recipient.name} ${recipient.phone}`.toLowerCase().includes(query));
+  const selectedIds = new Set(selectedRecipients.map((recipient) => recipient.id));
+
+  function toggleRecipient(recipient) {
+    setSelectedRecipients((current) => (current.some((item) => item.id === recipient.id) ? current.filter((item) => item.id !== recipient.id) : [...current, recipient]));
+  }
+
+  function addTemporaryRecipient() {
+    const code = manualRecipient.countryCode.replace(/[^\d]/g, "");
+    const phone = manualRecipient.phone.replace(/[^\d]/g, "");
+    if (!code || !phone) return;
+    const recipient = {
+      id: `manual-${Date.now()}`,
+      name: manualRecipient.name.trim() || `Test recipient ${phone.slice(-4)}`,
+      countryCode: `+${code}`,
+      phone,
+      source: "temporary",
+      optedIn: true,
+    };
+    setSelectedRecipients((current) => [...current, recipient]);
+    setManualRecipient({ name: "", countryCode: "+91", phone: "" });
+  }
+
+  return (
+    <div className="grid gap-5 lg:grid-cols-[1fr_340px]">
+      <div className="space-y-4">
+        <div>
+          <h3 className="text-base font-black text-slate-950">Choose recipients</h3>
+          <p className="mt-1 text-sm font-semibold text-slate-500">Saved Party contacts will appear here when persisted phone data exists.</p>
+        </div>
+        <label className="flex h-11 items-center gap-3 rounded-xl border border-slate-200 bg-white px-4">
+          <FiSearch className="text-slate-400" />
+          <input value={recipientQuery} onChange={(event) => setRecipientQuery(event.target.value)} placeholder="Search Parties or phone numbers" className="min-w-0 flex-1 bg-transparent text-sm font-semibold outline-none" />
+        </label>
+        <div className="min-h-[220px] rounded-xl border border-slate-200 bg-slate-50 p-3">
+          {filteredParties.length ? (
+            <div className="space-y-2">
+              {filteredParties.map((recipient) => (
+                <button key={recipient.id} type="button" onClick={() => toggleRecipient(recipient)} className="flex w-full items-center justify-between rounded-lg bg-white px-3 py-2 text-left text-sm font-bold text-slate-700 hover:bg-emerald-50">
+                  <span>
+                    <span className="block text-slate-950">{recipient.name}</span>
+                    <span className="text-xs text-slate-500">{recipient.phone}</span>
+                  </span>
+                  <span className={`rounded-full px-2 py-1 text-[11px] font-black ${selectedIds.has(recipient.id) ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-500"}`}>
+                    {selectedIds.has(recipient.id) ? "Selected" : "Select"}
+                  </span>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="grid min-h-[190px] place-items-center text-center">
+              <div>
+                <FiUsers className="mx-auto h-9 w-9 text-slate-300" />
+                <p className="mt-2 text-sm font-black text-slate-700">No saved Party recipients found</p>
+                <p className="mt-1 max-w-sm text-xs font-semibold leading-5 text-slate-500">Add persisted Party phone numbers in a later contacts phase, or add one opted-in test recipient here.</p>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+      <aside className="space-y-4 rounded-xl border border-slate-200 bg-white p-4">
+        <div>
+          <p className="text-xs font-black uppercase tracking-wide text-slate-500">Temporary recipient</p>
+          <p className="mt-1 text-xs font-semibold leading-5 text-slate-500">For current Cloud API test sending only.</p>
+        </div>
+        <input value={manualRecipient.name} onChange={(event) => setManualRecipient((current) => ({ ...current, name: event.target.value }))} placeholder="Name optional" className="h-10 w-full rounded-lg border border-slate-200 px-3 text-sm font-semibold outline-none focus:border-[#36A175]" />
+        <div className="grid grid-cols-[86px_1fr] gap-2">
+          <input value={manualRecipient.countryCode} onChange={(event) => setManualRecipient((current) => ({ ...current, countryCode: event.target.value }))} placeholder="+91" className="h-10 rounded-lg border border-slate-200 px-3 text-sm font-semibold outline-none focus:border-[#36A175]" />
+          <input value={manualRecipient.phone} onChange={(event) => setManualRecipient((current) => ({ ...current, phone: event.target.value }))} placeholder="Phone number" className="h-10 rounded-lg border border-slate-200 px-3 text-sm font-semibold outline-none focus:border-[#36A175]" />
+        </div>
+        <button type="button" onClick={addTemporaryRecipient} className="h-10 w-full rounded-lg border border-[#36A175]/30 bg-emerald-50 text-sm font-black text-emerald-700 hover:bg-emerald-100">
+          Add Recipient
+        </button>
+        <div className="rounded-lg bg-slate-50 p-3">
+          <p className="text-sm font-black text-slate-900">{selectedRecipients.length} selected</p>
+          <div className="mt-2 max-h-28 space-y-1 overflow-y-auto">
+            {selectedRecipients.map((recipient) => (
+              <button key={recipient.id} type="button" onClick={() => toggleRecipient(recipient)} className="flex w-full justify-between rounded-md px-2 py-1 text-left text-xs font-bold text-slate-600 hover:bg-white">
+                <span>{recipient.name}</span>
+                <span>{recipient.countryCode || ""} {recipient.phone}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+        <label className="flex items-start gap-2 rounded-lg bg-amber-50 p-3 text-xs font-bold leading-5 text-amber-800">
+          <input type="checkbox" checked={consentConfirmed} onChange={(event) => setConsentConfirmed(event.target.checked)} className="mt-0.5 h-4 w-4 accent-[#36A175]" />
+          I confirm these recipients opted in or are authorized for testing.
+        </label>
+      </aside>
+    </div>
+  );
+}
+
+function CampaignMessageStep({ assets, selectedPoster, messageDraft, setMessageDraft }) {
+  const approvedTemplates = assets.templates.filter((template) => template.status === "APPROVED");
+  const imageTemplates = approvedTemplates.filter((template) => templateHeaderFormat(template) === "IMAGE");
+  const selectedMetaTemplate = approvedTemplates.find((template) => template.id === messageDraft.templateId);
+  const templateVariables = extractTemplateVariables(selectedMetaTemplate);
+  const renderedMessage = renderTemplateMessage(selectedMetaTemplate, messageDraft.variables, messageDraft.caption);
+
+  return (
+    <div className="grid gap-5 lg:grid-cols-[1fr_340px]">
+      <div className="space-y-4">
+        <div>
+          <h3 className="text-base font-black text-slate-950">Compose message</h3>
+          <p className="mt-1 text-sm font-semibold text-slate-500">Choose an approved WhatsApp template and fill the customer-facing text.</p>
+        </div>
+        {!approvedTemplates.length && (
+          <div className="rounded-xl border border-amber-100 bg-amber-50 p-4 text-sm font-bold leading-6 text-amber-800">
+            No approved WhatsApp message template is available for this WABA yet.
+          </div>
+        )}
+        {selectedPoster && !imageTemplates.length && (
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm font-bold leading-6 text-slate-600">
+            Poster sending needs an approved template with an image header. Text templates can be prepared now.
+          </div>
+        )}
+        <div className="grid gap-3 sm:grid-cols-2">
+          {approvedTemplates.map((template) => {
+            const active = messageDraft.templateId === template.id;
+            const headerFormat = templateHeaderFormat(template);
+            return (
+              <button
+                key={template.id}
+                type="button"
+                onClick={() => setMessageDraft((current) => ({ ...current, templateId: template.id, variables: {} }))}
+                className={`rounded-xl border p-4 text-left transition ${active ? "border-[#1A1F71] bg-blue-50 ring-2 ring-blue-100" : "border-slate-200 bg-white hover:border-[#36A175]"}`}
+              >
+                <p className="text-sm font-black text-slate-950">{templateFriendlyName(template)}</p>
+                <p className="mt-1 text-xs font-bold text-slate-500">{template.language || "Language not set"} {headerFormat ? `- ${headerFormat} header` : "- text body"}</p>
+                <details className="mt-2 text-[11px] font-semibold text-slate-400">
+                  <summary>Template details</summary>
+                  <span>{template.name}</span>
+                </details>
+              </button>
+            );
+          })}
+        </div>
+        <textarea
+          value={messageDraft.caption}
+          onChange={(event) => setMessageDraft((current) => ({ ...current, caption: event.target.value }))}
+          rows={4}
+          placeholder="Write the message/caption customers should see."
+          className="w-full resize-none rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold outline-none focus:border-[#36A175]"
+        />
+        {templateVariables.length > 0 && (
+          <div className="grid gap-3 sm:grid-cols-2">
+            {templateVariables.map((variable) => (
+              <label key={variable.key} className="block">
+                <span className="mb-2 block text-xs font-black uppercase tracking-wide text-slate-500">
+                  Message field {variable.index}
+                </span>
+                <input
+                  value={messageDraft.variables[variable.key] || ""}
+                  onChange={(event) => setMessageDraft((current) => ({ ...current, variables: { ...current.variables, [variable.key]: event.target.value } }))}
+                  placeholder={variable.componentType === "body" && variable.index === 1 ? messageDraft.caption || "Caption text" : `Value ${variable.index}`}
+                  className="h-10 w-full rounded-lg border border-slate-200 px-3 text-sm font-semibold outline-none focus:border-[#36A175]"
+                />
+              </label>
+            ))}
+          </div>
+        )}
+      </div>
+      <aside className="rounded-xl border border-slate-200 bg-white p-4">
+        <p className="text-xs font-black uppercase tracking-wide text-slate-500">Message preview</p>
+        <div className="mt-3 rounded-xl bg-emerald-50 p-4 text-sm font-semibold leading-6 text-slate-800">
+          {renderedMessage || "Select a template and enter message text."}
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+function CampaignPreviewStep({ selectedPoster, selectedRecipients, assets, messageDraft }) {
+  const selectedMetaTemplate = assets.templates.find((template) => template.id === messageDraft.templateId);
+  return (
+    <div className="grid gap-5 lg:grid-cols-[360px_1fr]">
+      <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+        {selectedPoster ? <img src={selectedPoster.image} alt={selectedPoster.title} className="max-h-[420px] w-full rounded-lg object-contain" /> : <div className="grid h-72 place-items-center text-sm font-bold text-slate-400">No poster selected</div>}
+      </div>
+      <div className="space-y-4">
+        <div className="rounded-xl border border-slate-200 bg-white p-4">
+          <p className="text-xs font-black uppercase tracking-wide text-slate-500">Recipients</p>
+          <p className="mt-1 text-3xl font-black text-slate-950">{selectedRecipients.length}</p>
+        </div>
+        <div className="rounded-xl border border-slate-200 bg-white p-4">
+          <p className="text-xs font-black uppercase tracking-wide text-slate-500">Template</p>
+          <p className="mt-1 text-sm font-black text-slate-950">{selectedMetaTemplate ? templateFriendlyName(selectedMetaTemplate) : "No approved template selected"}</p>
+        </div>
+        <div className="rounded-xl border border-slate-200 bg-white p-4">
+          <p className="text-xs font-black uppercase tracking-wide text-slate-500">Message</p>
+          <p className="mt-2 whitespace-pre-wrap text-sm font-semibold leading-6 text-slate-700">{renderTemplateMessage(selectedMetaTemplate, messageDraft.variables, messageDraft.caption) || "No message composed."}</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CampaignSendStep({ readyForQueue, selectedRecipients, selectedPoster, selectedMetaTemplate }) {
+  return (
+    <div className="grid gap-5 lg:grid-cols-[1fr_340px]">
+      <div className="rounded-xl border border-slate-200 bg-white p-5">
+        <h3 className="text-base font-black text-slate-950">Campaign is prepared</h3>
+        <p className="mt-2 text-sm font-semibold leading-6 text-slate-500">
+          Sending and scheduling need SQL recipient storage plus a queue worker, so this screen stops before fake bulk success.
+        </p>
+        <div className="mt-5 grid gap-3 sm:grid-cols-2">
+          <button type="button" disabled className="h-11 rounded-lg bg-slate-200 text-sm font-black text-white">
+            Send Now
+          </button>
+          <button type="button" disabled className="h-11 rounded-lg border border-slate-200 bg-slate-50 text-sm font-black text-slate-400">
+            Schedule Later
+          </button>
+        </div>
+        {!readyForQueue && (
+          <p className="mt-4 rounded-lg bg-amber-50 p-3 text-xs font-bold leading-5 text-amber-800">
+            Complete creative, recipients, opt-in confirmation, and approved template selection before this can move to the queue phase.
+          </p>
+        )}
+      </div>
+      <aside className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+        <p className="text-xs font-black uppercase tracking-wide text-slate-500">Production interfaces</p>
+        <div className="mt-3 space-y-2 text-xs font-bold leading-5 text-slate-600">
+          <p>Campaign: poster, template, caption, schedule.</p>
+          <p>Recipients: Party/contact IDs with opt-in state.</p>
+          <p>Message jobs: one queued Cloud API send per recipient.</p>
+          <p>Webhook: updates sent, delivered, read, failed.</p>
+        </div>
+        <div className="mt-4 rounded-lg bg-white p-3 text-xs font-bold text-slate-700">
+          {selectedPoster?.title || "No poster"} - {selectedMetaTemplate ? templateFriendlyName(selectedMetaTemplate) : "No template"} - {selectedRecipients.length} recipients
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+function WhatsAppCampaignBuilder({ status, assets, onOpenConnection }) {
+  const [activeStep, setActiveStep] = useState(0);
+  const [selectedPoster, setSelectedPoster] = useState(whatsappMarketingTemplates[0] || null);
+  const [partyRecipients] = useState(() => loadPartyRecipients());
+  const [selectedRecipients, setSelectedRecipients] = useState([]);
+  const [recipientQuery, setRecipientQuery] = useState("");
+  const [manualRecipient, setManualRecipient] = useState({ name: "", countryCode: "+91", phone: "" });
+  const [consentConfirmed, setConsentConfirmed] = useState(false);
+  const [messageDraft, setMessageDraft] = useState({ caption: whatsappMarketingDefaults.whatsappText, templateId: "", variables: {} });
+  const approvedTemplates = assets.templates.filter((template) => template.status === "APPROVED");
+  const effectiveTemplateId = messageDraft.templateId || approvedTemplates[0]?.id || "";
+  const selectedMetaTemplate = approvedTemplates.find((template) => template.id === effectiveTemplateId);
+  const effectiveMessageDraft = { ...messageDraft, templateId: effectiveTemplateId };
+  const readyForQueue = Boolean(selectedPoster && selectedRecipients.length && consentConfirmed && selectedMetaTemplate);
+
+  return (
+    <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+        <div>
+          <p className="text-sm font-bold text-[#36A175]">WhatsApp Campaigns</p>
+          <h2 className="mt-1 text-xl font-black text-slate-950">Create Campaign</h2>
+          <p className="mt-1 text-sm font-semibold leading-6 text-slate-500">Build poster, recipients, message, and preview using approved WhatsApp templates.</p>
+        </div>
+        <button type="button" onClick={onOpenConnection} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-4 text-sm font-black text-slate-700 hover:bg-white">
+          <FiShield />
+          Connection/Test
+        </button>
+      </div>
+
+      <div className="mt-5 flex gap-2 overflow-x-auto pb-1">
+        {campaignSteps.map((step, index) => (
+          <CampaignStepButton key={step} index={index} label={step} activeStep={activeStep} onSelect={setActiveStep} />
+        ))}
+      </div>
+
+      <div className="mt-5 rounded-2xl border border-slate-100 bg-slate-50/70 p-4">
+        {activeStep === 0 && <CampaignCreativeStep selectedPoster={selectedPoster} onSelectPoster={setSelectedPoster} />}
+        {activeStep === 1 && (
+          <CampaignRecipientsStep
+            partyRecipients={partyRecipients}
+            selectedRecipients={selectedRecipients}
+            setSelectedRecipients={setSelectedRecipients}
+            recipientQuery={recipientQuery}
+            setRecipientQuery={setRecipientQuery}
+            manualRecipient={manualRecipient}
+            setManualRecipient={setManualRecipient}
+            consentConfirmed={consentConfirmed}
+            setConsentConfirmed={setConsentConfirmed}
+          />
+        )}
+        {activeStep === 2 && <CampaignMessageStep assets={assets} selectedPoster={selectedPoster} messageDraft={effectiveMessageDraft} setMessageDraft={setMessageDraft} />}
+        {activeStep === 3 && <CampaignPreviewStep selectedPoster={selectedPoster} selectedRecipients={selectedRecipients} assets={assets} messageDraft={effectiveMessageDraft} />}
+        {activeStep === 4 && <CampaignSendStep readyForQueue={readyForQueue} selectedRecipients={selectedRecipients} selectedPoster={selectedPoster} selectedMetaTemplate={selectedMetaTemplate} />}
+      </div>
+
+      <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
+        <div className="text-xs font-bold text-slate-500">
+          {status.connected ? `${selectedRecipients.length} recipients selected` : "Connect WhatsApp to load approved templates"}
+        </div>
+        <div className="flex gap-2">
+          <button type="button" onClick={() => setActiveStep((step) => Math.max(0, step - 1))} disabled={activeStep === 0} className="h-10 rounded-lg border border-slate-200 bg-white px-4 text-sm font-black text-slate-600 hover:bg-slate-50 disabled:text-slate-300">
+            Back
+          </button>
+          <button type="button" onClick={() => setActiveStep((step) => Math.min(campaignSteps.length - 1, step + 1))} disabled={activeStep === campaignSteps.length - 1} className="h-10 rounded-lg bg-[#1A1F71] px-4 text-sm font-black text-white hover:bg-[#14185a] disabled:bg-slate-300">
+            Next
+          </button>
+        </div>
+      </div>
+    </section>
+  );
 }
 
 function WhatsAppBusinessPanel({
@@ -1059,6 +1478,7 @@ function WhatsAppMarketing() {
   const [whatsappLoading, setWhatsAppLoading] = useState(false);
   const [whatsappError, setWhatsAppError] = useState(callbackNotice.error);
   const [whatsappToast, setWhatsAppToast] = useState(callbackNotice.toast);
+  const [showConnectionPanel, setShowConnectionPanel] = useState(Boolean(callbackNotice.error));
   const [testForm, setTestForm] = useState({ countryCode: "+91", phoneNumber: "", optInConfirmed: false, variables: {} });
   const [sendState, setSendState] = useState({ loading: false, success: false, message: "", messageId: "" });
 
@@ -1311,22 +1731,39 @@ function WhatsAppMarketing() {
       <main className="space-y-5 p-5">
         {whatsappToast && <div className="rounded-lg border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm font-black text-emerald-700">{whatsappToast}</div>}
 
-        <WhatsAppBusinessPanel
-          status={whatsappStatus}
-          assets={whatsappAssets}
-          selection={whatsappSelection}
-          loading={whatsappLoading || whatsappStatus.loading}
-          error={whatsappError}
-          sendState={sendState}
-          onConnect={handleConnectWhatsApp}
-          onRefresh={() => refreshWhatsAppConnection()}
-          onDisconnect={handleDisconnectWhatsApp}
-          onSelectionChange={handleWhatsAppSelectionChange}
-          onSaveSelection={handleSaveWhatsAppSelection}
-          onSendTest={handleSendTestWhatsApp}
-          testForm={testForm}
-          setTestForm={setTestForm}
-        />
+        <WhatsAppCampaignBuilder status={whatsappStatus} assets={whatsappAssets} onOpenConnection={() => setShowConnectionPanel((current) => !current)} />
+
+        <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-sm font-black text-slate-950">Connection/Test</p>
+              <p className="mt-1 text-xs font-semibold text-slate-500">{whatsappStatus.connected ? "WhatsApp Cloud API connection is available." : "Connect or load test setup to fetch approved templates."}</p>
+            </div>
+            <button type="button" onClick={() => setShowConnectionPanel((current) => !current)} className="h-10 rounded-lg border border-slate-200 bg-slate-50 px-4 text-sm font-black text-slate-700 hover:bg-white">
+              {showConnectionPanel ? "Hide" : "Open"} Connection/Test
+            </button>
+          </div>
+          {(showConnectionPanel || !whatsappStatus.connected) && (
+            <div className="mt-4">
+              <WhatsAppBusinessPanel
+                status={whatsappStatus}
+                assets={whatsappAssets}
+                selection={whatsappSelection}
+                loading={whatsappLoading || whatsappStatus.loading}
+                error={whatsappError}
+                sendState={sendState}
+                onConnect={handleConnectWhatsApp}
+                onRefresh={() => refreshWhatsAppConnection()}
+                onDisconnect={handleDisconnectWhatsApp}
+                onSelectionChange={handleWhatsAppSelectionChange}
+                onSaveSelection={handleSaveWhatsAppSelection}
+                onSendTest={handleSendTestWhatsApp}
+                testForm={testForm}
+                setTestForm={setTestForm}
+              />
+            </div>
+          )}
+        </section>
 
         <section>
           <div>
