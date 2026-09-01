@@ -13,6 +13,7 @@ If unavailable: show retry-only connection error.
 If not connected: show onboarding only with `Continue with Meta`.
 If connected but incomplete: show setup incomplete and keep campaign builder locked.
 If ready: show compact connected bar -> Creative -> Recipients -> Message -> Preview -> Send.
+Ready means connected WABA + business phone + approved templates loaded; choosing a specific template happens in the Message step.
 
 ## Files Involved
 
@@ -27,7 +28,7 @@ If ready: show compact connected bar -> Creative -> Recipients -> Message -> Pre
 
 ## APIs
 
-- `GET /api/auth/whatsapp/status`: returns connection, assets, selection, readiness, and test-mode availability.
+- `GET /api/auth/whatsapp/status`: returns connection, assets, selection, readiness, and test-mode availability without auto-connecting test assets.
 - `GET /api/auth/whatsapp`: starts current Meta OAuth dialog using backend config.
 - `POST /api/auth/whatsapp/test-connect`: loads backend Meta test WABA/phone/template assets.
 - `GET /api/whatsapp-business/assets`: refreshes real WABA, phone, and template lists.
@@ -40,6 +41,7 @@ If ready: show compact connected bar -> Creative -> Recipients -> Message -> Pre
 `Continue with Meta` currently calls `/api/auth/whatsapp`, which opens a backend-built Facebook OAuth URL.
 This is not full client Embedded Signup/production onboarding yet; business phone setup and durable tenant storage are pending.
 Developer/Test Tools are behind `Manage Connection` and keep Meta Test Setup plus Single Real Test Send.
+Normal customers are not automatically connected to `WHATSAPP_TEST_*` assets.
 
 ## What Works
 

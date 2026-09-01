@@ -83,7 +83,7 @@ function emptyWhatsAppReadiness() {
     hasSelectedApprovedTemplate: false,
     requiredPermissionsAvailable: false,
     readyToSend: false,
-    blockingReason: "Connect WhatsApp Business before sending a test template message.",
+    blockingReason: "Connect WhatsApp Business before creating campaigns.",
     blockingCode: "WHATSAPP_NOT_CONNECTED",
     missingPermissions: [],
   };
@@ -102,7 +102,7 @@ function resolveWhatsAppReadiness(status = {}, assets = emptyWhatsAppAssets(), s
   let blockingCode = "";
 
   if (!connected) {
-    blockingReason = "Connect WhatsApp Business before sending a test template message.";
+    blockingReason = "Connect WhatsApp Business before creating campaigns.";
     blockingCode = "WHATSAPP_NOT_CONNECTED";
   } else if (!hasWaba) {
     blockingReason = "No WhatsApp Business Account found. Complete WhatsApp Business setup in Meta Business Manager.";
@@ -116,8 +116,8 @@ function resolveWhatsAppReadiness(status = {}, assets = emptyWhatsAppAssets(), s
   } else if (!hasSelectedPhoneNumber) {
     blockingReason = "Select a WhatsApp business phone number.";
     blockingCode = "NO_PHONE_NUMBER";
-  } else if (!hasApprovedTemplate || !hasSelectedApprovedTemplate) {
-    blockingReason = "Select an approved WhatsApp message template.";
+  } else if (!hasApprovedTemplate) {
+    blockingReason = "No approved WhatsApp message template found for this account.";
     blockingCode = "TEMPLATE_NOT_APPROVED";
   }
 
@@ -132,7 +132,7 @@ function resolveWhatsAppReadiness(status = {}, assets = emptyWhatsAppAssets(), s
     hasApprovedTemplate,
     hasSelectedApprovedTemplate,
     requiredPermissionsAvailable: true,
-    readyToSend: connected && hasSelectedWaba && hasSelectedPhoneNumber && hasSelectedApprovedTemplate,
+    readyToSend: connected && hasSelectedWaba && hasSelectedPhoneNumber && hasApprovedTemplate,
     blockingReason,
     blockingCode,
   };
@@ -167,6 +167,15 @@ function formatWhatsAppRequestError(error, fallback) {
     details?.fbtraceId ? `fbtrace_id: ${details.fbtraceId}` : "",
   ].filter(Boolean);
   return metaParts.length ? `${message} (${metaParts.join(", ")})` : message;
+}
+
+function isWhatsAppAuthOrDisconnectedError(error) {
+  const category = error?.payload?.error?.category || error?.payload?.readiness?.blockingCode || "";
+  return error?.status === 401 || ["WHATSAPP_NOT_CONNECTED", "TOKEN_EXPIRED"].includes(category);
+}
+
+function isWhatsAppConfigError(error) {
+  return error?.status === 503 || error?.payload?.configured === false;
 }
 
 function safeParseJson(value, fallback) {
@@ -261,8 +270,9 @@ function WhatsAppOnboarding({ status, loading, onContinueMeta, onManageConnectio
         <p className="mt-6 text-sm font-black uppercase tracking-wide text-[#36A175]">WhatsApp Marketing</p>
         <h2 className="mt-2 text-2xl font-black text-slate-950">Connect WhatsApp Business</h2>
         <p className="mt-3 text-sm font-semibold leading-6 text-slate-500">
-          Connect your official WhatsApp Business account to start creating campaigns.
+          Connect your business WhatsApp account to create and send campaigns to your customers.
         </p>
+        <p className="mt-2 text-xs font-bold text-slate-400">You'll securely connect your WhatsApp Business account through Meta.</p>
         {!canUseMeta && (
           <p className="mt-4 rounded-lg bg-amber-50 p-3 text-xs font-bold leading-5 text-amber-800">
             Production Meta OAuth is not configured yet. Use Manage Connection only for developer test setup.
@@ -278,6 +288,26 @@ function WhatsAppOnboarding({ status, loading, onContinueMeta, onManageConnectio
             Manage Connection
           </button>
         </div>
+      </div>
+    </section>
+  );
+}
+
+function WhatsAppConfigurationError({ onManageConnection }) {
+  return (
+    <section className="grid min-h-[420px] place-items-center rounded-2xl border border-amber-100 bg-white p-6 text-center shadow-sm">
+      <div className="max-w-md">
+        <span className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-amber-50 text-amber-600">
+          <FiAlertCircle className="h-7 w-7" />
+        </span>
+        <h2 className="mt-5 text-xl font-black text-slate-950">WhatsApp setup is not configured</h2>
+        <p className="mt-2 text-sm font-semibold leading-6 text-slate-500">
+          The backend needs Meta WhatsApp OAuth settings before customers can connect a WhatsApp Business account.
+        </p>
+        <button type="button" onClick={onManageConnection} className="mt-5 inline-flex h-11 items-center gap-2 rounded-lg border border-slate-200 bg-white px-5 text-sm font-black text-slate-700 hover:bg-slate-50">
+          <FiShield />
+          Manage Connection
+        </button>
       </div>
     </section>
   );
@@ -1130,7 +1160,7 @@ function WhatsAppBusinessPanel({
   const selectedTemplate = assets.templates.find((template) => template.id === selection.templateId);
   const templateVariables = extractTemplateVariables(selectedTemplate);
   const saveDisabled = loading || !selection.wabaId || !selection.phoneNumberId || !selection.templateId;
-  const sendDisabled = loading || sendState.loading || !readiness.readyToSend || !testForm.optInConfirmed;
+  const sendDisabled = loading || sendState.loading || !readiness.readyToSend || !selection.templateId || !testForm.optInConfirmed;
 
   return (
     <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -1632,7 +1662,8 @@ function WhatsAppMarketing() {
       })
       .catch((statusError) => {
         if (!active) return;
-        setConnectionStatusUnavailable(true);
+        const expectedConnectionState = isWhatsAppAuthOrDisconnectedError(statusError) || isWhatsAppConfigError(statusError);
+        setConnectionStatusUnavailable(!expectedConnectionState);
         if (statusError.payload) {
           setWhatsAppStatus({ ...statusError.payload, loading: false });
           setWhatsAppAssets(statusError.payload.assets || emptyWhatsAppAssets());
@@ -1667,7 +1698,8 @@ function WhatsAppMarketing() {
       setConnectionStatusUnavailable(false);
       return nextStatus;
     } catch (requestError) {
-      setConnectionStatusUnavailable(true);
+      const expectedConnectionState = isWhatsAppAuthOrDisconnectedError(requestError) || isWhatsAppConfigError(requestError);
+      setConnectionStatusUnavailable(!expectedConnectionState);
       if (requestError.payload) {
         setWhatsAppStatus({ ...requestError.payload, loading: false });
         setWhatsAppAssets(requestError.payload.assets || emptyWhatsAppAssets());
@@ -1699,7 +1731,13 @@ function WhatsAppMarketing() {
 
       startWhatsAppConnection();
     } catch (requestError) {
-      setConnectionStatusUnavailable(true);
+      const expectedConnectionState = isWhatsAppAuthOrDisconnectedError(requestError) || isWhatsAppConfigError(requestError);
+      setConnectionStatusUnavailable(!expectedConnectionState);
+      if (requestError.payload) {
+        setWhatsAppStatus({ ...requestError.payload, loading: false });
+        setWhatsAppAssets(requestError.payload.assets || emptyWhatsAppAssets());
+        setWhatsAppSelection(requestError.payload.selection || emptyWhatsAppSelection());
+      }
       setWhatsAppLoading(false);
       setWhatsAppError(formatWhatsAppRequestError(requestError, "Unable to start WhatsApp Business connection."));
     }
@@ -1853,6 +1891,7 @@ function WhatsAppMarketing() {
 
   const connectionReadiness = resolveWhatsAppReadiness(whatsappStatus, whatsappAssets, whatsappSelection);
   const campaignsUnlocked = connectionReadiness.readyToSend;
+  const configurationError = whatsappStatus.configured === false && whatsappStatus.oauthConfigured === false;
 
   const renderDeveloperTools = () => (
     <section className="space-y-3">
@@ -1920,6 +1959,11 @@ function WhatsAppMarketing() {
           </section>
         ) : connectionStatusUnavailable ? (
           <WhatsAppConnectionUnavailable error={whatsappError} onRetry={() => refreshWhatsAppConnection()} loading={whatsappLoading} />
+        ) : configurationError ? (
+          <>
+            <WhatsAppConfigurationError onManageConnection={() => setShowConnectionPanel(true)} />
+            {showConnectionPanel && renderDeveloperTools()}
+          </>
         ) : !whatsappStatus.connected ? (
           <>
             <WhatsAppOnboarding status={whatsappStatus} loading={whatsappLoading} onContinueMeta={handleContinueWithMeta} onManageConnection={() => setShowConnectionPanel(true)} />

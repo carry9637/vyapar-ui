@@ -17,7 +17,7 @@ import {
   updateWhatsAppConnectionSnapshot,
 } from "../services/whatsappConnectionStore.js";
 import { getMetaPermissions, getMetaUser } from "../services/metaOAuthService.js";
-import { ensureWhatsAppTestConnection, isWhatsAppTestConnection, refreshWhatsAppTestConnectionAssets } from "../services/whatsappTestModeService.js";
+import { isWhatsAppTestConnection, refreshWhatsAppTestConnectionAssets } from "../services/whatsappTestModeService.js";
 
 const router = Router();
 
@@ -39,13 +39,14 @@ function pruneSelection(selection = {}, assets = {}, requestedBusinessId = "", r
   const wabas = new Set((assets.wabas || []).map((item) => item.id));
   const phoneNumbers = new Set((assets.phoneNumbers || []).map((item) => item.id));
   const templates = new Set((assets.templates || []).map((item) => item.id));
-  const businessId = requestedBusinessId && businesses.has(requestedBusinessId) ? requestedBusinessId : selection.businessId && businesses.has(selection.businessId) ? selection.businessId : "";
-  const wabaId = requestedWabaId && wabas.has(requestedWabaId) ? requestedWabaId : selection.wabaId && wabas.has(selection.wabaId) ? selection.wabaId : "";
+  const businessId =
+    requestedBusinessId && businesses.has(requestedBusinessId) ? requestedBusinessId : selection.businessId && businesses.has(selection.businessId) ? selection.businessId : assets.selectedBusinessId || "";
+  const wabaId = requestedWabaId && wabas.has(requestedWabaId) ? requestedWabaId : selection.wabaId && wabas.has(selection.wabaId) ? selection.wabaId : assets.selectedWabaId || "";
 
   return {
     businessId,
     wabaId,
-    phoneNumberId: selection.phoneNumberId && phoneNumbers.has(selection.phoneNumberId) ? selection.phoneNumberId : "",
+    phoneNumberId: selection.phoneNumberId && phoneNumbers.has(selection.phoneNumberId) ? selection.phoneNumberId : assets.selectedPhoneNumberId || "",
     templateId: selection.templateId && templates.has(selection.templateId) ? selection.templateId : "",
   };
 }
@@ -67,10 +68,6 @@ router.get("/assets", async (req, res) => {
   }
 
   try {
-    if ((!connection.connected || !connection.token?.accessToken) && config.testModeConfigured) {
-      connection = await ensureWhatsAppTestConnection();
-    }
-
     if (!connection.connected || !connection.token?.accessToken) {
       return res.status(401).json({
         success: false,
@@ -127,23 +124,6 @@ router.get("/assets", async (req, res) => {
 router.post("/selection", async (req, res) => {
   const config = getWhatsAppOAuthConfig();
   let connection = getWhatsAppConnection();
-
-  if ((!connection.connected || !connection.token?.accessToken) && config.testModeConfigured) {
-    try {
-      connection = await ensureWhatsAppTestConnection();
-    } catch (error) {
-      const normalized = normalizeWhatsAppError(error, "Unable to load WhatsApp test setup");
-      return res.status(502).json({
-        success: false,
-        configured: config.configured,
-        oauthConfigured: config.oauthConfigured,
-        testModeConfigured: config.testModeConfigured,
-        message: normalized.message,
-        error: normalized,
-        ...getWhatsAppPublicConnection(),
-      });
-    }
-  }
 
   if (!connection.connected) {
     return res.status(401).json({
@@ -208,23 +188,6 @@ router.get("/templates/:templateId/variables", async (req, res) => {
   const config = getWhatsAppOAuthConfig();
   let connection = getWhatsAppConnection();
 
-  if ((!connection.connected || !connection.token?.accessToken) && config.testModeConfigured) {
-    try {
-      connection = await ensureWhatsAppTestConnection();
-    } catch (error) {
-      const normalized = normalizeWhatsAppError(error, "Unable to load WhatsApp test setup");
-      return res.status(502).json({
-        success: false,
-        configured: config.configured,
-        oauthConfigured: config.oauthConfigured,
-        testModeConfigured: config.testModeConfigured,
-        message: normalized.message,
-        error: normalized,
-        ...getWhatsAppPublicConnection(),
-      });
-    }
-  }
-
   const template = (connection.assets.templates || []).find((item) => item.id === req.params.templateId);
 
   if (!template) {
@@ -248,23 +211,6 @@ router.get("/templates/:templateId/variables", async (req, res) => {
 router.post("/send-test", async (req, res) => {
   const config = getWhatsAppOAuthConfig();
   let connection = getWhatsAppConnection();
-
-  if ((!connection.connected || !connection.token?.accessToken) && config.testModeConfigured) {
-    try {
-      connection = await ensureWhatsAppTestConnection();
-    } catch (error) {
-      const normalized = normalizeWhatsAppError(error, "Unable to load WhatsApp test setup");
-      return res.status(502).json({
-        success: false,
-        configured: config.configured,
-        oauthConfigured: config.oauthConfigured,
-        testModeConfigured: config.testModeConfigured,
-        message: normalized.message,
-        error: normalized,
-        ...getWhatsAppPublicConnection(),
-      });
-    }
-  }
 
   if (!connection.connected || !connection.token?.accessToken) {
     return res.status(401).json({
@@ -323,6 +269,17 @@ router.post("/send-test", async (req, res) => {
   try {
     const recipient = normalizeRecipient(req.body?.countryCode, req.body?.phoneNumber);
     const template = selectedTemplate(connection);
+    if (!template || template.status !== "APPROVED") {
+      return res.status(400).json({
+        success: false,
+        configured: config.configured,
+        oauthConfigured: config.oauthConfigured,
+        testModeConfigured: config.testModeConfigured,
+        message: "Select an approved WhatsApp message template before sending a test message.",
+        error: { category: "TEMPLATE_NOT_APPROVED" },
+        ...getWhatsAppPublicConnection(),
+      });
+    }
     const result = await sendWhatsAppTemplateMessage({
       accessToken: connection.token.accessToken,
       phoneNumberId: connection.selection.phoneNumberId,

@@ -137,6 +137,12 @@ router.get("/whatsapp/callback", async (req, res) => {
       user,
       permissions,
       assets,
+      selection: {
+        businessId: assets.selectedBusinessId || "",
+        wabaId: assets.selectedWabaId || "",
+        phoneNumberId: assets.selectedPhoneNumberId || "",
+        templateId: "",
+      },
       token: {
         accessToken,
         tokenType: tokenPayload.token_type || "bearer",
@@ -156,24 +162,6 @@ router.get("/whatsapp/callback", async (req, res) => {
 
 router.get("/whatsapp/status", async (_req, res) => {
   const config = getWhatsAppOAuthConfig();
-  if (config.testModeConfigured) {
-    try {
-      await ensureWhatsAppTestConnection();
-    } catch (error) {
-      const normalized = normalizeWhatsAppError(error, "Unable to load WhatsApp test setup");
-      return res.status(502).json({
-        success: false,
-        configured: config.configured,
-        oauthConfigured: config.oauthConfigured,
-        testModeConfigured: config.testModeConfigured,
-        graphApiVersion: config.graphApiVersion,
-        message: normalized.message,
-        error: normalized,
-        ...getWhatsAppPublicConnection(),
-      });
-    }
-  }
-
   return res.json({
     success: true,
     configured: config.configured,

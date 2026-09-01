@@ -93,9 +93,6 @@ export function buildWhatsAppReadiness(connection = whatsappConnection) {
   } else if (!approvedTemplates.length) {
     blockingReason = "No approved WhatsApp message template found for this account.";
     blockingCode = "TEMPLATE_NOT_APPROVED";
-  } else if (!selectedTemplate || selectedTemplate.status !== "APPROVED") {
-    blockingReason = "Select an approved WhatsApp message template.";
-    blockingCode = "TEMPLATE_NOT_APPROVED";
   }
 
   return {

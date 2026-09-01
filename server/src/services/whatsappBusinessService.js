@@ -190,7 +190,8 @@ export async function fetchWhatsAppAssets(accessToken, options = {}) {
   await Promise.all(businessesToFetch.map((business) => fetchBusinessWabas(business, accessToken, warnings, wabasById)));
 
   const normalizedWabas = Array.from(wabasById.values());
-  const selectedWaba = normalizedWabas.find((waba) => waba.id === selectedWabaId);
+  const effectiveSelectedWabaId = selectedWabaId || (normalizedWabas.length === 1 ? normalizedWabas[0].id : "");
+  const selectedWaba = normalizedWabas.find((waba) => waba.id === effectiveSelectedWabaId);
   const phoneNumbers = selectedWaba
     ? (await safeFetchEdge(`/${selectedWaba.id}/phone_numbers`, accessToken, { fields: PHONE_NUMBER_FIELDS }, warnings, `${selectedWaba.name || selectedWaba.id} phone numbers`)).map((phone) =>
         normalizePhoneNumber(phone, selectedWaba.id),
@@ -202,6 +203,8 @@ export async function fetchWhatsAppAssets(accessToken, options = {}) {
       )
     : [];
 
+  const effectiveSelectedPhoneNumberId = phoneNumbers.length === 1 ? phoneNumbers[0].id : "";
+
   return {
     businesses: normalizedBusinesses,
     wabas: normalizedWabas,
@@ -210,6 +213,7 @@ export async function fetchWhatsAppAssets(accessToken, options = {}) {
     warnings,
     selectedBusinessId: selectedBusiness?.id || "",
     selectedWabaId: selectedWaba?.id || "",
+    selectedPhoneNumberId: effectiveSelectedPhoneNumberId,
     fetchedAt: new Date().toISOString(),
   };
 }
