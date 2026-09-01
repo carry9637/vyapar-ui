@@ -17,17 +17,19 @@ function createWhatsAppError(message, code = "WHATSAPP_API_ERROR", meta = null, 
 
 export function normalizeWhatsAppError(error, fallback = "WhatsApp request failed") {
   const normalized = normalizeMetaError(error, fallback);
+  const rawErrorCode = error?.code;
+  const errorCodeString = typeof rawErrorCode === "string" ? rawErrorCode : rawErrorCode !== undefined && rawErrorCode !== null ? String(rawErrorCode) : "";
   const metaCode = String(error?.metaCode || normalized.code || "");
   const subcode = String(normalized.subcode || "");
   const text = [normalized.type, normalized.userTitle, normalized.userMessage, normalized.message].filter(Boolean).join(" ").toLowerCase();
-  let category = error?.whatsappCategory || error?.code || "WHATSAPP_API_ERROR";
+  let category = error?.whatsappCategory || "WHATSAPP_API_ERROR";
   let stage = error?.stage || "";
   let message = normalized.message;
   let userTitle = normalized.userTitle;
   let userMessage = normalized.userMessage;
 
-  if (error?.code?.startsWith("WHATSAPP_") || error?.code === "NO_WABA" || error?.code === "NO_PHONE_NUMBER" || error?.code === "INVALID_RECIPIENT" || error?.code === "TEMPLATE_NOT_APPROVED") {
-    category = error.code;
+  if (errorCodeString.startsWith("WHATSAPP_") || errorCodeString === "NO_WABA" || errorCodeString === "NO_PHONE_NUMBER" || errorCodeString === "INVALID_RECIPIENT" || errorCodeString === "TEMPLATE_NOT_APPROVED") {
+    category = errorCodeString;
   } else if (metaCode === "190") {
     category = "TOKEN_EXPIRED";
     stage = stage || "TOKEN_VALIDATION";
