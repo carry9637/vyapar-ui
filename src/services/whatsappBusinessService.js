@@ -16,6 +16,11 @@ export async function getWhatsAppConnectionStatus() {
   return readJsonResponse(response, "Unable to load WhatsApp Business connection status.");
 }
 
+export async function getWhatsAppConnection() {
+  const response = await fetch(`${API_BASE_URL}/api/whatsapp-business/connection`);
+  return readJsonResponse(response, "Unable to load WhatsApp Business connection.");
+}
+
 export function startWhatsAppConnection() {
   window.location.assign(`${API_BASE_URL}/api/auth/whatsapp`);
 }
@@ -44,6 +49,16 @@ export async function getWhatsAppAssets({ businessId, wabaId } = {}) {
   return readJsonResponse(response, "Unable to load WhatsApp Business assets.");
 }
 
+export async function getApprovedWhatsAppTemplates() {
+  const response = await fetch(`${API_BASE_URL}/api/whatsapp-business/templates`);
+  return readJsonResponse(response, "Unable to load approved WhatsApp templates.");
+}
+
+export async function getWhatsAppCustomers() {
+  const response = await fetch(`${API_BASE_URL}/api/whatsapp-business/customers`);
+  return readJsonResponse(response, "Unable to load WhatsApp customers.");
+}
+
 export async function saveWhatsAppSelection(selection) {
   const response = await fetch(`${API_BASE_URL}/api/whatsapp-business/selection`, {
     method: "POST",
@@ -51,6 +66,42 @@ export async function saveWhatsAppSelection(selection) {
     body: JSON.stringify(selection),
   });
   return readJsonResponse(response, "Unable to save WhatsApp Business selection.");
+}
+
+export async function validateWhatsAppCampaign(payload) {
+  const response = await fetch(`${API_BASE_URL}/api/whatsapp-business/campaigns/validate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return readJsonResponse(response, "Unable to validate WhatsApp campaign.");
+}
+
+export async function prepareWhatsAppCampaign(payload) {
+  const response = await fetch(`${API_BASE_URL}/api/whatsapp-business/campaigns/prepare`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return readJsonResponse(response, "Unable to prepare WhatsApp campaign.");
+}
+
+export async function sendWhatsAppCampaign(payload) {
+  const response = await fetch(`${API_BASE_URL}/api/whatsapp-business/campaigns/send`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return readJsonResponse(response, "WhatsApp bulk delivery is not configured.");
+}
+
+export async function scheduleWhatsAppCampaign(payload) {
+  const response = await fetch(`${API_BASE_URL}/api/whatsapp-business/campaigns/schedule`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return readJsonResponse(response, "WhatsApp scheduling is not configured.");
 }
 
 export async function disconnectWhatsAppBusiness() {

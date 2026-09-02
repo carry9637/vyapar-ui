@@ -54,6 +54,18 @@ function whatsappRedirect(status, message = "") {
   return url.toString();
 }
 
+function publicWhatsAppAuthState(config = getWhatsAppOAuthConfig()) {
+  return {
+    ...getWhatsAppPublicConnection(),
+    configured: config.configured,
+    oauthConfigured: config.oauthConfigured,
+    embeddedSignupConfigured: config.embeddedSignupConfigured,
+    embeddedSignup: config.embeddedSignup,
+    testModeConfigured: config.testModeConfigured,
+    graphApiVersion: config.graphApiVersion,
+  };
+}
+
 router.get("/whatsapp", (req, res) => {
   try {
     const { authorizationUrl, stateCookie, maxAgeMs } = buildWhatsAppAuthorizationRequest(req.query.returnTo);
@@ -73,14 +85,9 @@ router.post("/whatsapp/test-connect", async (_req, res) => {
     const publicConnection = getWhatsAppPublicConnection();
     return res.json({
       success: true,
-      configured: config.configured,
-      oauthConfigured: config.oauthConfigured,
-      embeddedSignupConfigured: config.embeddedSignupConfigured,
-      embeddedSignup: config.embeddedSignup,
-      testModeConfigured: config.testModeConfigured,
       testConnectionState: publicConnection.readiness?.readyToSend ? "TEST_READY" : "TEST_INCOMPLETE",
       message: "WhatsApp test setup connected.",
-      ...publicConnection,
+      ...publicWhatsAppAuthState(config),
     });
   } catch (error) {
     let normalized;
@@ -111,7 +118,7 @@ router.post("/whatsapp/test-connect", async (_req, res) => {
       testModeConfigured: config.testModeConfigured,
       message: normalized.message,
       error: normalized,
-      ...getWhatsAppPublicConnection(),
+      ...publicWhatsAppAuthState(config),
     });
   }
 });
@@ -127,7 +134,7 @@ router.post("/whatsapp/embedded-signup", async (req, res) => {
       testModeConfigured: config.testModeConfigured,
       message: "WhatsApp Embedded Signup is not configured on the backend.",
       error: { category: "WHATSAPP_CONFIG_MISSING", stage: "CONFIG" },
-      ...getWhatsAppPublicConnection(),
+      ...publicWhatsAppAuthState(config),
     });
   }
 
@@ -141,7 +148,7 @@ router.post("/whatsapp/embedded-signup", async (req, res) => {
       testModeConfigured: config.testModeConfigured,
       message: "WhatsApp Embedded Signup authorization code missing.",
       error: { category: "WHATSAPP_AUTH_ERROR", stage: "AUTH_ERROR" },
-      ...getWhatsAppPublicConnection(),
+      ...publicWhatsAppAuthState(config),
     });
   }
 
@@ -186,7 +193,7 @@ router.post("/whatsapp/embedded-signup", async (req, res) => {
       embeddedSignupConfigured: config.embeddedSignupConfigured,
       testModeConfigured: config.testModeConfigured,
       message: "WhatsApp Business connected.",
-      ...getWhatsAppPublicConnection(),
+      ...publicWhatsAppAuthState(config),
     });
   } catch (error) {
     const normalized = normalizeWhatsAppError(error, "WhatsApp Embedded Signup failed");
@@ -200,7 +207,7 @@ router.post("/whatsapp/embedded-signup", async (req, res) => {
       testModeConfigured: config.testModeConfigured,
       message: normalized.message,
       error: normalized,
-      ...getWhatsAppPublicConnection(),
+      ...publicWhatsAppAuthState(config),
     });
   }
 });
@@ -278,22 +285,17 @@ router.get("/whatsapp/status", async (_req, res) => {
   const config = getWhatsAppOAuthConfig();
   return res.json({
     success: true,
-    configured: config.configured,
-    oauthConfigured: config.oauthConfigured,
-    embeddedSignupConfigured: config.embeddedSignupConfigured,
-    embeddedSignup: config.embeddedSignup,
-    testModeConfigured: config.testModeConfigured,
-    graphApiVersion: config.graphApiVersion,
-    ...getWhatsAppPublicConnection(),
+    ...publicWhatsAppAuthState(config),
   });
 });
 
 router.post("/whatsapp/disconnect", (_req, res) => {
-  const connection = disconnectWhatsAppConnection();
+  const config = getWhatsAppOAuthConfig();
+  disconnectWhatsAppConnection();
   return res.json({
     success: true,
     message: "WhatsApp Business disconnected",
-    ...connection,
+    ...publicWhatsAppAuthState(config),
   });
 });
 

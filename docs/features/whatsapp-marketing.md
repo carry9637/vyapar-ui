@@ -2,84 +2,91 @@
 
 ## Feature Goal
 
-Business owners can send festival greetings, offers, discounts, announcements, and promotional campaigns to their own customers through WhatsApp.
-Example: Business -> Diwali poster -> "20% OFF this weekend" -> select customers -> send WhatsApp campaign.
+Businesses customize posters and prepare WhatsApp promotions for their own customers.
+Production goal: poster -> selected customers -> approved template/message -> backend Cloud API delivery -> status tracking.
 
-## Architecture
+## Final Customer Flow
 
-Frontend React -> Ledgerly Node/Express API -> Meta WhatsApp Cloud API -> Customer WhatsApp.
-React must not call Meta directly and must not loop through bulk recipients itself.
-Bulk production sending belongs in backend persistence plus a controlled queue/worker.
+WhatsApp Marketing -> poster gallery -> click poster -> existing customization modal -> Download / Share / Send on WhatsApp.
+Send on WhatsApp first checks `GET /api/whatsapp-business/connection`; disconnected users see Continue with Meta.
+If READY, the compact drawer proceeds: Select Customers -> Choose Message -> Review -> Send.
+If setup is missing or incomplete, Manage Connection opens the shared connection panel instead of a hidden drawer state.
+Manage Connection treats NOT_CONNECTED as a normal customer state with an active Meta CTA when Embedded Signup is configured.
+CONFIGURATION_ERROR appears only when backend production WhatsApp config is truly missing.
+The old customer-facing 5-step campaign wizard is removed.
 
-## Current Development Flow
+## Frontend Files
 
-Ledgerly -> Developer/Test Mode -> Meta Test WABA -> approved template -> one authorized recipient.
-Implemented/testing path: `POST /api/whatsapp-business/send-test` -> `sendWhatsAppTemplateMessage()` -> Meta `POST /{phone_number_id}/messages`.
-The backend reconstructs test mode from `WHATSAPP_TEST_ACCESS_TOKEN`, `WHATSAPP_TEST_WABA_ID`, and `WHATSAPP_TEST_PHONE_NUMBER_ID`; tokens are never returned to React.
+- `src/pages/BusinessGrowth/WhatsAppMarketing.jsx`: poster gallery, customization modal, connection status, shared Manage Connection panel, send drawer, developer tools.
+- `src/services/whatsappBusinessService.js`: frontend API client for connection, templates, customers, validation, prepare, test send.
 
-## Production Connection Flow
+## Backend Files
 
-Ledgerly -> WhatsApp Marketing -> Continue with Meta -> Meta Embedded Signup -> business authenticates -> connects WhatsApp Business Account -> sender business phone is connected/verified.
-Backend then discovers WABA + Phone Number ID + approved templates, marks the connection READY, and unlocks the campaign builder.
-Production Embedded Signup is currently blocked by Meta/Facebook "Feature unavailable" and Meta verification/review/configuration remains pending.
-Do not describe production onboarding as completed yet.
-Production onboarding errors are shown as warnings and do not block Developer/Test Mode verification.
+- `server/src/routes/whatsappAuth.js`: WhatsApp status, Embedded Signup, test connect, disconnect.
+- `server/src/routes/whatsappBusiness.js`: assets, templates, selection, single test send, campaign contract routes.
+- `server/src/services/whatsappBusinessService.js`: Meta WABA/phone/template fetch and one-message Cloud API send.
+- `server/src/services/whatsappCampaignService.js`: production validation/prepare contracts; no DB or queue yet.
+- `server/src/routes/whatsappWebhook.js`: webhook verification and future event intake.
 
-## Where Customer Numbers Will Come From
+## APIs Implemented
 
-Meta does not provide the business's customer list.
-Customer numbers will belong to the Ledgerly business and should come from Ledgerly customer/contact data.
-Planned sources: existing Ledgerly Customers/Parties, Add Customer/Contact, and later CSV/Excel import.
-Example: Rahul | 987xxxxxxx, Priya | 982xxxxxxx, Amit | 976xxxxxxx.
-These contacts will be stored in the common Ledgerly SQL database later, not inside Meta.
+- `POST /api/auth/whatsapp/test-connect`: rebuilds test WABA/phone/template connection from backend env.
+- `POST /api/whatsapp-business/send-test`: sends one real approved-template test message through Meta `/{phone_number_id}/messages`.
+- `GET /api/whatsapp-business/connection`: returns current safe connection state.
+- `GET /api/whatsapp-business/templates`: returns approved templates for the current connection.
 
-## Planned Campaign Flow
+## APIs Prepared / Not Production-Active
 
-Poster/Creative -> Select Customers -> Message/approved WhatsApp template -> Preview -> Send.
-Recipients UI should support search, checkbox selection, Select All, groups/filters, and selected count.
-Business owners should select saved customers, not type 100 numbers for every campaign.
+- `GET /api/whatsapp-business/customers`: returns persistence-not-configured until customer DB exists.
+- `POST /api/whatsapp-business/campaigns/validate`: validates connection, recipients, template variables, consent, and media compatibility.
+- `POST /api/whatsapp-business/campaigns/prepare`: creates a preview payload only; no persistence.
+- `POST /api/whatsapp-business/campaigns/send`: returns `BULK_DELIVERY_NOT_CONFIGURED`.
+- `POST /api/whatsapp-business/campaigns/schedule`: returns `SCHEDULING_NOT_CONFIGURED`.
 
-## Planned Bulk Backend Flow
+## Meta Cloud API Flow
 
-User clicks Send Campaign once.
-Ledgerly backend creates Campaign -> selected recipients -> message jobs/queue.
-A worker sends through Meta WhatsApp Cloud API and stores per-recipient status.
-Statuses later move from pending -> sent -> delivered -> read, or failed.
-Webhooks will update delivery statuses.
-Frontend does not open 100 `wa.me` links and does not call Meta 100 times.
+Test mode: backend env token -> test WABA -> test phone -> approved template -> one authorized recipient.
+Production: business-specific connection -> WABA -> `phone_number_id` -> approved template -> Cloud API.
+React never receives tokens and never calls Meta directly, except the official Embedded Signup JS SDK launch.
+Developer/Test Tools stay hidden for normal production users and are explicit dev-only verification.
 
-## WhatsApp Template Requirement
+## Customer Number Sources
 
-Business-initiated promotional campaigns must follow WhatsApp Business Platform rules and use approved templates where required.
-Poster/media campaigns will need a suitable approved media/image-header template and real media handling.
-Do not implement fake arbitrary bulk free-text sending.
+Meta does not provide customer lists.
+Future customer numbers come from Ledgerly billing/customer records, manual Add Customer/Contact, and CSV/Excel import.
+Current drawer reuses existing browser Party/customer phone data only when available.
 
-## Implemented API
+## Production Database Plan
 
-REAL / CURRENT: `POST /api/whatsapp-business/send-test`
-Purpose: send one real approved-template WhatsApp test message to an opted-in or authorized test recipient.
-Function chain: `WhatsAppMarketing.jsx` -> `src/services/whatsappBusinessService.js` -> `server/src/routes/whatsappBusiness.js` -> `sendWhatsAppTemplateMessage()` -> Meta `/{phone_number_id}/messages`.
+Use PostgreSQL later.
+Conceptual tables: `businesses`, `customers`, `whatsapp_connections`, `whatsapp_campaigns`, `whatsapp_campaign_recipients`, `whatsapp_message_jobs`.
+No migrations or SQL persistence exist yet.
 
-## Future / NOT IMPLEMENTED
+## Production Bulk Flow
 
-[ ] Common PostgreSQL persistence
-[ ] Customer/contact database integration
-[ ] CSV/Excel customer import
-[ ] Campaign persistence
-[ ] Campaign recipient table
-[ ] Queue/worker
-[ ] Bulk sending
-[ ] Retry/idempotency
-[ ] Consent/opt-out persistence
-[ ] Meta message ID persistence
-[ ] Webhook delivery/read/failed persistence
-[ ] Campaign analytics
-[ ] Production Embedded Signup completion
+User clicks Send once -> backend validates campaign -> persists campaign/recipients -> creates jobs -> queue worker sends one recipient at a time -> stores Meta message IDs.
+No frontend loops, no fake bulk success, no direct browser-to-Meta calls.
+
+## Webhook Status Flow
+
+Meta webhook -> message status event -> lookup `meta_message_id` -> update recipient status.
+Future statuses: pending, sent, delivered, read, failed.
+Webhook persistence is not implemented yet.
+
+## Current Status
+
+Implemented: poster customization/share/download, simplified Send on WhatsApp drawer, approved template fetch, real single test send, production API contracts/validation layer.
+Manage Connection now handles config missing, not connected, reconnect, incomplete setup, and ready states from one shared panel.
+Continue with Meta uses the existing Embedded Signup flow when `META_APP_ID`, `META_APP_SECRET`, and `WHATSAPP_LOGIN_CONFIG_ID` are configured.
+Pending: PostgreSQL, customer persistence, imports, campaign persistence, recipients, queue worker, retries/idempotency, media upload/image-header sending, webhook persistence, analytics, production Embedded Signup completion.
+
+## Pending Production Work
+
+Complete Meta production onboarding, store per-business WhatsApp tokens/assets securely, add customer/contact database, implement queued bulk delivery, persist webhook statuses, and add campaign analytics.
 
 ## Manager Explanation
 
-WhatsApp Marketing lets a business send offers, festival greetings, and promotional campaigns to its customers.
-Customer numbers will come from Ledgerly's customer/contact database or future CSV/Excel imports, not from Meta.
-The business selects customers once and clicks Send Campaign.
-The backend will later create controlled message jobs and send them through Meta WhatsApp Cloud API.
-Currently we are first validating one real message end-to-end before implementing SQL and bulk campaign infrastructure.
+Customer ko ab simple poster gallery dikhegi: poster select karo, customize karo, download/share/send prepare karo.
+WhatsApp send drawer customer selection, message template, aur review ko compact rakhta hai.
+Abhi real Cloud API se one test message verified path preserved hai.
+Bulk production send ke liye PostgreSQL aur queue worker next phase me add honge.

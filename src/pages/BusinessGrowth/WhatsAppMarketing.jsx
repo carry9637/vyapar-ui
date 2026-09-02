@@ -29,10 +29,13 @@ import {
   connectWhatsAppTestMode,
   disconnectWhatsAppBusiness,
   getWhatsAppAssets,
+  getWhatsAppConnection,
   getWhatsAppConnectionStatus,
+  prepareWhatsAppCampaign,
   saveWhatsAppSelection,
   sendWhatsAppTestMessage,
   startWhatsAppConnection,
+  validateWhatsAppCampaign,
 } from "../../services/whatsappBusinessService";
 
 const EXPORT_WIDTH = 1080;
@@ -70,6 +73,19 @@ function emptyWhatsAppSelection() {
     wabaId: "",
     phoneNumberId: "",
     templateId: "",
+  };
+}
+
+function mergeWhatsAppStatus(previous = {}, next = {}) {
+  return {
+    ...previous,
+    ...next,
+    configured: next.configured ?? previous.configured,
+    oauthConfigured: next.oauthConfigured ?? previous.oauthConfigured,
+    embeddedSignupConfigured: next.embeddedSignupConfigured ?? previous.embeddedSignupConfigured,
+    embeddedSignup: next.embeddedSignup ?? previous.embeddedSignup,
+    testModeConfigured: next.testModeConfigured ?? previous.testModeConfigured,
+    graphApiVersion: next.graphApiVersion ?? previous.graphApiVersion,
   };
 }
 
@@ -908,365 +924,38 @@ function templateStatusClass(status) {
   return "bg-amber-50 text-amber-700";
 }
 
-const campaignSteps = ["Creative", "Recipients", "Message", "Preview", "Send"];
-
-function CampaignStepButton({ index, label, activeStep, onSelect }) {
-  const active = activeStep === index;
-  const complete = activeStep > index;
-  return (
-    <button
-      type="button"
-      onClick={() => onSelect(index)}
-      className={`flex min-w-[120px] flex-1 items-center gap-2 rounded-xl border px-3 py-2 text-left text-xs font-black transition ${
-        active ? "border-[#1A1F71] bg-[#1A1F71] text-white" : complete ? "border-emerald-100 bg-emerald-50 text-emerald-700" : "border-slate-200 bg-white text-slate-500"
-      }`}
-    >
-      <span className={`grid h-6 w-6 shrink-0 place-items-center rounded-full ${active ? "bg-white/15" : complete ? "bg-white text-emerald-700" : "bg-slate-100 text-slate-500"}`}>{index + 1}</span>
-      {label}
-    </button>
-  );
+function productionWhatsAppConfigured(status = {}) {
+  return Boolean(status.embeddedSignupConfigured || status.oauthConfigured);
 }
 
-function CampaignCreativeStep({ selectedPoster, onSelectPoster }) {
-  return (
-    <div className="space-y-4">
-      <div>
-        <h3 className="text-base font-black text-slate-950">Choose poster</h3>
-        <p className="mt-1 text-sm font-semibold text-slate-500">Use one of the existing WhatsApp Marketing creatives.</p>
-      </div>
-      <div className="grid max-h-[470px] gap-4 overflow-y-auto pr-1 sm:grid-cols-2 xl:grid-cols-3">
-        {whatsappMarketingTemplates.map((template) => {
-          const active = selectedPoster?.id === template.id;
-          return (
-            <button
-              key={template.id}
-              type="button"
-              onClick={() => onSelectPoster(template)}
-              className={`overflow-hidden rounded-xl border bg-white text-left shadow-sm transition hover:border-[#36A175] ${active ? "border-[#36A175] ring-2 ring-[#36A175]/15" : "border-slate-200"}`}
-            >
-              <div className="flex h-52 items-center justify-center bg-slate-50 p-3">
-                <img src={template.image} alt={template.title} className="max-h-full max-w-full rounded-lg object-contain" />
-              </div>
-              <div className="p-3">
-                <p className="text-sm font-black text-slate-950">{template.title}</p>
-                <p className="mt-1 text-xs font-bold text-slate-500">{template.subcategory} poster</p>
-              </div>
-            </button>
-          );
-        })}
-      </div>
-    </div>
-  );
+function whatsappMissingSetupCategories(status = {}) {
+  const missing = [];
+  if (!productionWhatsAppConfigured(status)) missing.push("Production Meta WhatsApp onboarding");
+  if (!status.testModeConfigured) missing.push("Developer test-mode assets");
+  return missing;
 }
 
-function CampaignRecipientsStep({ partyRecipients, selectedRecipients, setSelectedRecipients, recipientQuery, setRecipientQuery, manualRecipient, setManualRecipient, consentConfirmed, setConsentConfirmed }) {
-  const query = recipientQuery.trim().toLowerCase();
-  const filteredParties = partyRecipients.filter((recipient) => `${recipient.name} ${recipient.phone}`.toLowerCase().includes(query));
-  const selectedIds = new Set(selectedRecipients.map((recipient) => recipient.id));
-
-  function toggleRecipient(recipient) {
-    setSelectedRecipients((current) => (current.some((item) => item.id === recipient.id) ? current.filter((item) => item.id !== recipient.id) : [...current, recipient]));
-  }
-
-  function addTemporaryRecipient() {
-    const code = manualRecipient.countryCode.replace(/[^\d]/g, "");
-    const phone = manualRecipient.phone.replace(/[^\d]/g, "");
-    if (!code || !phone) return;
-    const recipient = {
-      id: `manual-${Date.now()}`,
-      name: manualRecipient.name.trim() || `Test recipient ${phone.slice(-4)}`,
-      countryCode: `+${code}`,
-      phone,
-      source: "temporary",
-      optedIn: true,
-    };
-    setSelectedRecipients((current) => [...current, recipient]);
-    setManualRecipient({ name: "", countryCode: "+91", phone: "" });
-  }
-
-  return (
-    <div className="grid gap-5 lg:grid-cols-[1fr_340px]">
-      <div className="space-y-4">
-        <div>
-          <h3 className="text-base font-black text-slate-950">Choose recipients</h3>
-          <p className="mt-1 text-sm font-semibold text-slate-500">Saved Party contacts will appear here when persisted phone data exists.</p>
-        </div>
-        <label className="flex h-11 items-center gap-3 rounded-xl border border-slate-200 bg-white px-4">
-          <FiSearch className="text-slate-400" />
-          <input value={recipientQuery} onChange={(event) => setRecipientQuery(event.target.value)} placeholder="Search Parties or phone numbers" className="min-w-0 flex-1 bg-transparent text-sm font-semibold outline-none" />
-        </label>
-        <div className="min-h-[220px] rounded-xl border border-slate-200 bg-slate-50 p-3">
-          {filteredParties.length ? (
-            <div className="space-y-2">
-              {filteredParties.map((recipient) => (
-                <button key={recipient.id} type="button" onClick={() => toggleRecipient(recipient)} className="flex w-full items-center justify-between rounded-lg bg-white px-3 py-2 text-left text-sm font-bold text-slate-700 hover:bg-emerald-50">
-                  <span>
-                    <span className="block text-slate-950">{recipient.name}</span>
-                    <span className="text-xs text-slate-500">{recipient.phone}</span>
-                  </span>
-                  <span className={`rounded-full px-2 py-1 text-[11px] font-black ${selectedIds.has(recipient.id) ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-500"}`}>
-                    {selectedIds.has(recipient.id) ? "Selected" : "Select"}
-                  </span>
-                </button>
-              ))}
-            </div>
-          ) : (
-            <div className="grid min-h-[190px] place-items-center text-center">
-              <div>
-                <FiUsers className="mx-auto h-9 w-9 text-slate-300" />
-                <p className="mt-2 text-sm font-black text-slate-700">No saved Party recipients found</p>
-                <p className="mt-1 max-w-sm text-xs font-semibold leading-5 text-slate-500">Add persisted Party phone numbers in a later contacts phase, or add one opted-in test recipient here.</p>
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-      <aside className="space-y-4 rounded-xl border border-slate-200 bg-white p-4">
-        <div>
-          <p className="text-xs font-black uppercase tracking-wide text-slate-500">Temporary recipient</p>
-          <p className="mt-1 text-xs font-semibold leading-5 text-slate-500">For current Cloud API test sending only.</p>
-        </div>
-        <input value={manualRecipient.name} onChange={(event) => setManualRecipient((current) => ({ ...current, name: event.target.value }))} placeholder="Name optional" className="h-10 w-full rounded-lg border border-slate-200 px-3 text-sm font-semibold outline-none focus:border-[#36A175]" />
-        <div className="grid grid-cols-[86px_1fr] gap-2">
-          <input value={manualRecipient.countryCode} onChange={(event) => setManualRecipient((current) => ({ ...current, countryCode: event.target.value }))} placeholder="+91" className="h-10 rounded-lg border border-slate-200 px-3 text-sm font-semibold outline-none focus:border-[#36A175]" />
-          <input value={manualRecipient.phone} onChange={(event) => setManualRecipient((current) => ({ ...current, phone: event.target.value }))} placeholder="Phone number" className="h-10 rounded-lg border border-slate-200 px-3 text-sm font-semibold outline-none focus:border-[#36A175]" />
-        </div>
-        <button type="button" onClick={addTemporaryRecipient} className="h-10 w-full rounded-lg border border-[#36A175]/30 bg-emerald-50 text-sm font-black text-emerald-700 hover:bg-emerald-100">
-          Add Recipient
-        </button>
-        <div className="rounded-lg bg-slate-50 p-3">
-          <p className="text-sm font-black text-slate-900">{selectedRecipients.length} selected</p>
-          <div className="mt-2 max-h-28 space-y-1 overflow-y-auto">
-            {selectedRecipients.map((recipient) => (
-              <button key={recipient.id} type="button" onClick={() => toggleRecipient(recipient)} className="flex w-full justify-between rounded-md px-2 py-1 text-left text-xs font-bold text-slate-600 hover:bg-white">
-                <span>{recipient.name}</span>
-                <span>{recipient.countryCode || ""} {recipient.phone}</span>
-              </button>
-            ))}
-          </div>
-        </div>
-        <label className="flex items-start gap-2 rounded-lg bg-amber-50 p-3 text-xs font-bold leading-5 text-amber-800">
-          <input type="checkbox" checked={consentConfirmed} onChange={(event) => setConsentConfirmed(event.target.checked)} className="mt-0.5 h-4 w-4 accent-[#36A175]" />
-          I confirm these recipients opted in or are authorized for testing.
-        </label>
-      </aside>
-    </div>
-  );
+function resolveManageConnectionState(status = {}, readiness = emptyWhatsAppReadiness()) {
+  if (!productionWhatsAppConfigured(status) && !status.connected) return "CONFIGURATION_ERROR";
+  if (!status.connected && /token|permission|reconnect/i.test(status.lastError || readiness.blockingReason || "")) return "AUTH_ERROR";
+  if (!status.connected) return "NOT_CONNECTED";
+  if (readiness.readyToSend) return "READY";
+  if (["TOKEN_EXPIRED", "INSUFFICIENT_PERMISSION"].includes(readiness.blockingCode) || /token|permission|reconnect/i.test(readiness.blockingReason || "")) return "AUTH_ERROR";
+  return "CONNECTED_INCOMPLETE";
 }
 
-function CampaignMessageStep({ assets, selectedPoster, messageDraft, setMessageDraft }) {
-  const approvedTemplates = assets.templates.filter((template) => template.status === "APPROVED");
-  const imageTemplates = approvedTemplates.filter((template) => templateHeaderFormat(template) === "IMAGE");
-  const selectedMetaTemplate = approvedTemplates.find((template) => template.id === messageDraft.templateId);
-  const templateVariables = extractTemplateVariables(selectedMetaTemplate);
-  const renderedMessage = renderTemplateMessage(selectedMetaTemplate, messageDraft.variables, messageDraft.caption);
-
-  return (
-    <div className="grid gap-5 lg:grid-cols-[1fr_340px]">
-      <div className="space-y-4">
-        <div>
-          <h3 className="text-base font-black text-slate-950">Compose message</h3>
-          <p className="mt-1 text-sm font-semibold text-slate-500">Choose an approved WhatsApp template and fill the customer-facing text.</p>
-        </div>
-        {!approvedTemplates.length && (
-          <div className="rounded-xl border border-amber-100 bg-amber-50 p-4 text-sm font-bold leading-6 text-amber-800">
-            No approved WhatsApp message template is available for this WABA yet.
-          </div>
-        )}
-        {selectedPoster && !imageTemplates.length && (
-          <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm font-bold leading-6 text-slate-600">
-            Poster sending needs an approved template with an image header. Text templates can be prepared now.
-          </div>
-        )}
-        <div className="grid gap-3 sm:grid-cols-2">
-          {approvedTemplates.map((template) => {
-            const active = messageDraft.templateId === template.id;
-            const headerFormat = templateHeaderFormat(template);
-            return (
-              <button
-                key={template.id}
-                type="button"
-                onClick={() => setMessageDraft((current) => ({ ...current, templateId: template.id, variables: {} }))}
-                className={`rounded-xl border p-4 text-left transition ${active ? "border-[#1A1F71] bg-blue-50 ring-2 ring-blue-100" : "border-slate-200 bg-white hover:border-[#36A175]"}`}
-              >
-                <p className="text-sm font-black text-slate-950">{templateFriendlyName(template)}</p>
-                <p className="mt-1 text-xs font-bold text-slate-500">{template.language || "Language not set"} {headerFormat ? `- ${headerFormat} header` : "- text body"}</p>
-                <details className="mt-2 text-[11px] font-semibold text-slate-400">
-                  <summary>Template details</summary>
-                  <span>{template.name}</span>
-                </details>
-              </button>
-            );
-          })}
-        </div>
-        <textarea
-          value={messageDraft.caption}
-          onChange={(event) => setMessageDraft((current) => ({ ...current, caption: event.target.value }))}
-          rows={4}
-          placeholder="Write the message/caption customers should see."
-          className="w-full resize-none rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold outline-none focus:border-[#36A175]"
-        />
-        {templateVariables.length > 0 && (
-          <div className="grid gap-3 sm:grid-cols-2">
-            {templateVariables.map((variable) => (
-              <label key={variable.key} className="block">
-                <span className="mb-2 block text-xs font-black uppercase tracking-wide text-slate-500">
-                  Message field {variable.index}
-                </span>
-                <input
-                  value={messageDraft.variables[variable.key] || ""}
-                  onChange={(event) => setMessageDraft((current) => ({ ...current, variables: { ...current.variables, [variable.key]: event.target.value } }))}
-                  placeholder={variable.componentType === "body" && variable.index === 1 ? messageDraft.caption || "Caption text" : `Value ${variable.index}`}
-                  className="h-10 w-full rounded-lg border border-slate-200 px-3 text-sm font-semibold outline-none focus:border-[#36A175]"
-                />
-              </label>
-            ))}
-          </div>
-        )}
-      </div>
-      <aside className="rounded-xl border border-slate-200 bg-white p-4">
-        <p className="text-xs font-black uppercase tracking-wide text-slate-500">Message preview</p>
-        <div className="mt-3 rounded-xl bg-emerald-50 p-4 text-sm font-semibold leading-6 text-slate-800">
-          {renderedMessage || "Select a template and enter message text."}
-        </div>
-      </aside>
-    </div>
-  );
+function selectedBusinessName(assets = emptyWhatsAppAssets(), selection = emptyWhatsAppSelection(), status = {}) {
+  const business = assets.businesses.find((item) => item.id === selection.businessId);
+  const waba = assets.wabas.find((item) => item.id === selection.wabaId);
+  return business?.name || waba?.name || waba?.businessName || status.user?.name || "WhatsApp Business";
 }
 
-function CampaignPreviewStep({ selectedPoster, selectedRecipients, assets, messageDraft }) {
-  const selectedMetaTemplate = assets.templates.find((template) => template.id === messageDraft.templateId);
-  return (
-    <div className="grid gap-5 lg:grid-cols-[360px_1fr]">
-      <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-        {selectedPoster ? <img src={selectedPoster.image} alt={selectedPoster.title} className="max-h-[420px] w-full rounded-lg object-contain" /> : <div className="grid h-72 place-items-center text-sm font-bold text-slate-400">No poster selected</div>}
-      </div>
-      <div className="space-y-4">
-        <div className="rounded-xl border border-slate-200 bg-white p-4">
-          <p className="text-xs font-black uppercase tracking-wide text-slate-500">Recipients</p>
-          <p className="mt-1 text-3xl font-black text-slate-950">{selectedRecipients.length}</p>
-        </div>
-        <div className="rounded-xl border border-slate-200 bg-white p-4">
-          <p className="text-xs font-black uppercase tracking-wide text-slate-500">Template</p>
-          <p className="mt-1 text-sm font-black text-slate-950">{selectedMetaTemplate ? templateFriendlyName(selectedMetaTemplate) : "No approved template selected"}</p>
-        </div>
-        <div className="rounded-xl border border-slate-200 bg-white p-4">
-          <p className="text-xs font-black uppercase tracking-wide text-slate-500">Message</p>
-          <p className="mt-2 whitespace-pre-wrap text-sm font-semibold leading-6 text-slate-700">{renderTemplateMessage(selectedMetaTemplate, messageDraft.variables, messageDraft.caption) || "No message composed."}</p>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function CampaignSendStep({ readyForQueue, selectedRecipients, selectedPoster, selectedMetaTemplate }) {
-  return (
-    <div className="grid gap-5 lg:grid-cols-[1fr_340px]">
-      <div className="rounded-xl border border-slate-200 bg-white p-5">
-        <h3 className="text-base font-black text-slate-950">Campaign is prepared</h3>
-        <p className="mt-2 text-sm font-semibold leading-6 text-slate-500">
-          Sending and scheduling need SQL recipient storage plus a queue worker, so this screen stops before fake bulk success.
-        </p>
-        <div className="mt-5 grid gap-3 sm:grid-cols-2">
-          <button type="button" disabled className="h-11 rounded-lg bg-slate-200 text-sm font-black text-white">
-            Send Now
-          </button>
-          <button type="button" disabled className="h-11 rounded-lg border border-slate-200 bg-slate-50 text-sm font-black text-slate-400">
-            Schedule Later
-          </button>
-        </div>
-        {!readyForQueue && (
-          <p className="mt-4 rounded-lg bg-amber-50 p-3 text-xs font-bold leading-5 text-amber-800">
-            Complete creative, recipients, opt-in confirmation, and approved template selection before this can move to the queue phase.
-          </p>
-        )}
-      </div>
-      <aside className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-        <p className="text-xs font-black uppercase tracking-wide text-slate-500">Production interfaces</p>
-        <div className="mt-3 space-y-2 text-xs font-bold leading-5 text-slate-600">
-          <p>Campaign: poster, template, caption, schedule.</p>
-          <p>Recipients: Party/contact IDs with opt-in state.</p>
-          <p>Message jobs: one queued Cloud API send per recipient.</p>
-          <p>Webhook: updates sent, delivered, read, failed.</p>
-        </div>
-        <div className="mt-4 rounded-lg bg-white p-3 text-xs font-bold text-slate-700">
-          {selectedPoster?.title || "No poster"} - {selectedMetaTemplate ? templateFriendlyName(selectedMetaTemplate) : "No template"} - {selectedRecipients.length} recipients
-        </div>
-      </aside>
-    </div>
-  );
-}
-
-function WhatsAppCampaignBuilder({ status, assets, onOpenConnection }) {
-  const [activeStep, setActiveStep] = useState(0);
-  const [selectedPoster, setSelectedPoster] = useState(whatsappMarketingTemplates[0] || null);
-  const [partyRecipients] = useState(() => loadPartyRecipients());
-  const [selectedRecipients, setSelectedRecipients] = useState([]);
-  const [recipientQuery, setRecipientQuery] = useState("");
-  const [manualRecipient, setManualRecipient] = useState({ name: "", countryCode: "+91", phone: "" });
-  const [consentConfirmed, setConsentConfirmed] = useState(false);
-  const [messageDraft, setMessageDraft] = useState({ caption: whatsappMarketingDefaults.whatsappText, templateId: "", variables: {} });
-  const approvedTemplates = assets.templates.filter((template) => template.status === "APPROVED");
-  const effectiveTemplateId = messageDraft.templateId || approvedTemplates[0]?.id || "";
-  const selectedMetaTemplate = approvedTemplates.find((template) => template.id === effectiveTemplateId);
-  const effectiveMessageDraft = { ...messageDraft, templateId: effectiveTemplateId };
-  const readyForQueue = Boolean(selectedPoster && selectedRecipients.length && consentConfirmed && selectedMetaTemplate);
-
-  return (
-    <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-        <div>
-          <p className="text-sm font-bold text-[#36A175]">WhatsApp Campaigns</p>
-          <h2 className="mt-1 text-xl font-black text-slate-950">Create Campaign</h2>
-          <p className="mt-1 text-sm font-semibold leading-6 text-slate-500">Build poster, recipients, message, and preview using approved WhatsApp templates.</p>
-        </div>
-        <button type="button" onClick={onOpenConnection} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-4 text-sm font-black text-slate-700 hover:bg-white">
-          <FiShield />
-          Manage Connection
-        </button>
-      </div>
-
-      <div className="mt-5 flex gap-2 overflow-x-auto pb-1">
-        {campaignSteps.map((step, index) => (
-          <CampaignStepButton key={step} index={index} label={step} activeStep={activeStep} onSelect={setActiveStep} />
-        ))}
-      </div>
-
-      <div className="mt-5 rounded-2xl border border-slate-100 bg-slate-50/70 p-4">
-        {activeStep === 0 && <CampaignCreativeStep selectedPoster={selectedPoster} onSelectPoster={setSelectedPoster} />}
-        {activeStep === 1 && (
-          <CampaignRecipientsStep
-            partyRecipients={partyRecipients}
-            selectedRecipients={selectedRecipients}
-            setSelectedRecipients={setSelectedRecipients}
-            recipientQuery={recipientQuery}
-            setRecipientQuery={setRecipientQuery}
-            manualRecipient={manualRecipient}
-            setManualRecipient={setManualRecipient}
-            consentConfirmed={consentConfirmed}
-            setConsentConfirmed={setConsentConfirmed}
-          />
-        )}
-        {activeStep === 2 && <CampaignMessageStep assets={assets} selectedPoster={selectedPoster} messageDraft={effectiveMessageDraft} setMessageDraft={setMessageDraft} />}
-        {activeStep === 3 && <CampaignPreviewStep selectedPoster={selectedPoster} selectedRecipients={selectedRecipients} assets={assets} messageDraft={effectiveMessageDraft} />}
-        {activeStep === 4 && <CampaignSendStep readyForQueue={readyForQueue} selectedRecipients={selectedRecipients} selectedPoster={selectedPoster} selectedMetaTemplate={selectedMetaTemplate} />}
-      </div>
-
-      <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
-        <div className="text-xs font-bold text-slate-500">
-          {status.connected ? `${selectedRecipients.length} recipients selected` : "Connect WhatsApp to load approved templates"}
-        </div>
-        <div className="flex gap-2">
-          <button type="button" onClick={() => setActiveStep((step) => Math.max(0, step - 1))} disabled={activeStep === 0} className="h-10 rounded-lg border border-slate-200 bg-white px-4 text-sm font-black text-slate-600 hover:bg-slate-50 disabled:text-slate-300">
-            Back
-          </button>
-          <button type="button" onClick={() => setActiveStep((step) => Math.min(campaignSteps.length - 1, step + 1))} disabled={activeStep === campaignSteps.length - 1} className="h-10 rounded-lg bg-[#1A1F71] px-4 text-sm font-black text-white hover:bg-[#14185a] disabled:bg-slate-300">
-            Next
-          </button>
-        </div>
-      </div>
-    </section>
-  );
+function canShowWhatsAppDeveloperTools(status = {}) {
+  if (!status.testModeConfigured && status.source !== "test_env") return false;
+  if (typeof window === "undefined") return false;
+  const host = window.location.hostname;
+  const params = new URLSearchParams(window.location.search);
+  return host === "localhost" || host === "127.0.0.1" || params.get("whatsappDev") === "1" || window.localStorage?.getItem("vyapar:whatsapp-dev-tools") === "1";
 }
 
 function WhatsAppBusinessPanel({
@@ -1285,33 +974,82 @@ function WhatsAppBusinessPanel({
   onSendTest,
   testForm,
   setTestForm,
+  developerToolsEnabled = false,
 }) {
   const configured = status.configured !== false;
   const connected = Boolean(status.connected);
   const usingTestMode = status.source === "test_env";
-  const testModeConfigured = Boolean(status.testModeConfigured);
+  const testModeConfigured = Boolean(status.testModeConfigured && (developerToolsEnabled || usingTestMode));
   const readiness = resolveWhatsAppReadiness(status, assets, selection);
+  const manageState = resolveManageConnectionState(status, readiness);
+  const productionConfigured = productionWhatsAppConfigured(status);
+  const missingSetup = whatsappMissingSetupCategories(status);
   const approvedTemplates = assets.templates.filter((template) => template.status === "APPROVED");
   const selectedTemplate = assets.templates.find((template) => template.id === selection.templateId);
   const templateVariables = extractTemplateVariables(selectedTemplate);
   const saveDisabled = loading || !selection.wabaId || !selection.phoneNumberId || !selection.templateId;
   const sendDisabled = loading || sendState.loading || !readiness.readyToSend || !selection.templateId || !testForm.optInConfirmed;
+  const phone = selectedBusinessPhone(assets, selection);
+  const businessName = selectedBusinessName(assets, selection, status);
+  const showTestPanel = developerToolsEnabled || usingTestMode;
 
   return (
     <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="grid gap-5 xl:grid-cols-[1fr_420px]">
+      <div className={`grid gap-5 ${showTestPanel ? "xl:grid-cols-[1fr_420px]" : ""}`}>
         <div>
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div>
               <p className="text-xs font-black uppercase tracking-wide text-[#36A175]">WhatsApp Business Connection</p>
               <h2 className="mt-1 text-lg font-black text-slate-950">Official Cloud API foundation</h2>
               <p className="mt-1 text-sm font-semibold leading-6 text-slate-500">
-                Connect Meta, choose a real WABA and phone number, then send one approved-template test message.
+                Connect Meta, verify the business sender phone, and load approved WhatsApp templates.
               </p>
             </div>
             <span className={`inline-flex rounded-full px-3 py-1 text-xs font-black ${readiness.readyToSend ? "bg-emerald-50 text-emerald-700" : connected ? "bg-amber-50 text-amber-700" : "bg-slate-100 text-slate-600"}`}>
-              {readiness.readyToSend ? "Ready for test" : connected ? "Setup required" : testModeConfigured ? "Test setup available" : configured ? "Disconnected" : "Config missing"}
+              {readiness.readyToSend ? (usingTestMode ? "Ready for test" : "Ready") : connected ? "Setup required" : testModeConfigured ? "Test setup available" : configured ? "Disconnected" : "Config missing"}
             </span>
+          </div>
+
+          <div className="mt-4 rounded-xl border border-slate-100 bg-slate-50 p-4">
+            {manageState === "CONFIGURATION_ERROR" && (
+              <div>
+                <p className="text-sm font-black text-amber-800">WhatsApp setup is not configured for this environment.</p>
+                <p className="mt-1 text-xs font-semibold leading-5 text-slate-500">
+                  Missing setup category: {missingSetup.length ? missingSetup.join(", ") : "Production connection details"}.
+                </p>
+                {!productionConfigured && (
+                  <p className="mt-2 text-xs font-bold text-amber-700">
+                    Continue with Meta is disabled until production Embedded Signup or OAuth configuration is available.
+                  </p>
+                )}
+              </div>
+            )}
+            {manageState === "NOT_CONNECTED" && (
+              <div>
+                <p className="text-sm font-black text-slate-950">Connect WhatsApp Business</p>
+                <p className="mt-1 text-xs font-semibold leading-5 text-slate-500">Start Meta onboarding to connect a business sender phone and approved templates.</p>
+              </div>
+            )}
+            {manageState === "AUTH_ERROR" && (
+              <div>
+                <p className="text-sm font-black text-amber-800">WhatsApp Business connection needs to be reconnected.</p>
+                <p className="mt-1 text-xs font-semibold leading-5 text-slate-500">Reconnect through Meta so permissions, templates, and sender phone access can be verified again.</p>
+              </div>
+            )}
+            {manageState === "CONNECTED_INCOMPLETE" && (
+              <div>
+                <p className="text-sm font-black text-amber-800">Finish WhatsApp Business setup</p>
+                <p className="mt-1 text-xs font-semibold leading-5 text-slate-500">Select a WABA, business phone, and load approved templates before campaigns unlock.</p>
+              </div>
+            )}
+            {manageState === "READY" && (
+              <div>
+                <p className="text-sm font-black text-emerald-700">{businessName}</p>
+                <p className="mt-1 text-xs font-semibold leading-5 text-slate-500">
+                  Sender phone: {phone?.displayPhoneNumber || phone?.verifiedName || "Selected"} - Approved templates: {approvedTemplates.length}
+                </p>
+              </div>
+            )}
           </div>
 
           <div className="mt-4 grid gap-3 rounded-xl border border-slate-100 bg-slate-50 p-3 sm:grid-cols-2">
@@ -1347,6 +1085,10 @@ function WhatsAppBusinessPanel({
                 <button type="button" onClick={onConnect} disabled={loading || !(status.embeddedSignupConfigured || status.oauthConfigured)} className="inline-flex h-10 items-center gap-2 rounded-lg bg-[#1A1F71] px-4 text-sm font-bold text-white hover:bg-[#14185a] disabled:bg-slate-300">
                   <FiZap />
                   Continue with Meta
+                </button>
+                <button type="button" onClick={onRefresh} disabled={loading} className="inline-flex h-10 items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 text-sm font-bold text-slate-700 hover:bg-slate-50 disabled:text-slate-300">
+                  <FiRefreshCw />
+                  Retry
                 </button>
                 {testModeConfigured && (
                   <button type="button" onClick={onTestConnect} disabled={loading} className="inline-flex h-10 items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 text-sm font-bold text-amber-800 hover:bg-amber-100 disabled:text-slate-300">
@@ -1425,6 +1167,7 @@ function WhatsAppBusinessPanel({
           )}
         </div>
 
+        {showTestPanel && (
         <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
           <div className="flex items-center gap-2">
             <span className="grid h-9 w-9 place-items-center rounded-lg bg-emerald-50 text-emerald-700">
@@ -1482,12 +1225,398 @@ function WhatsAppBusinessPanel({
             </div>
           )}
         </div>
+        )}
       </div>
     </section>
   );
 }
 
-function PersonalizeModal({ template, onClose }) {
+function splitRecipientPhone(recipient = {}) {
+  const raw = String(recipient.phone || "").trim();
+  const digits = raw.replace(/[^\d]/g, "");
+  if (raw.startsWith("+") && digits.length > 10) {
+    return {
+      countryCode: `+${digits.slice(0, digits.length - 10)}`,
+      phone: digits.slice(-10),
+    };
+  }
+  return {
+    countryCode: recipient.countryCode || "+91",
+    phone: digits,
+  };
+}
+
+function resolveSendConnectionState(status = {}, assets = emptyWhatsAppAssets(), selection = emptyWhatsAppSelection(), connectionCheck = {}) {
+  if (connectionCheck.loading) return "LOADING";
+  if (connectionCheck.error) return "TEMPORARILY_UNAVAILABLE";
+  const readiness = resolveWhatsAppReadiness(status, assets, selection);
+  const productionReady = Boolean(status.connected && status.source !== "test_env" && readiness.readyToSend);
+
+  if (productionReady) return "READY";
+  if (status.configured === false || (!status.embeddedSignupConfigured && !status.oauthConfigured)) return "CONFIGURATION_ERROR";
+  if (!status.connected && /token|permission|reconnect/i.test(status.lastError || readiness.blockingReason || "")) return "AUTH_ERROR";
+  if (!status.connected) return "NOT_CONNECTED";
+  if (["TOKEN_EXPIRED", "INSUFFICIENT_PERMISSION"].includes(readiness.blockingCode) || /token|permission|reconnect/i.test(readiness.blockingReason || "")) return "AUTH_ERROR";
+  return "CONNECTED_INCOMPLETE";
+}
+
+function SendConnectionGate({ state, loading, error, onContinueMeta, onRetryConnection, onManageConnection }) {
+  const content = {
+    NOT_CONNECTED: {
+      title: "Connect WhatsApp Business",
+      text: "Connect your business WhatsApp account before sending messages to customers.",
+      action: "Continue with Meta",
+      helper: "Messages are sent securely through Meta WhatsApp Cloud API.",
+      onAction: onContinueMeta,
+      iconClass: "bg-emerald-50 text-emerald-700",
+    },
+    CONFIGURATION_ERROR: {
+      title: "WhatsApp connection is not configured for this environment.",
+      text: "Ask the admin to finish production Meta WhatsApp setup before customer sending.",
+      action: "Manage Connection",
+      helper: "Messages are sent securely through Meta WhatsApp Cloud API.",
+      onAction: onManageConnection,
+      iconClass: "bg-amber-50 text-amber-700",
+    },
+    AUTH_ERROR: {
+      title: "WhatsApp Business connection needs to be reconnected.",
+      text: "Reconnect through Meta so approved templates and the sender phone can be verified again.",
+      action: "Reconnect with Meta",
+      helper: "Messages are sent securely through Meta WhatsApp Cloud API.",
+      onAction: onContinueMeta,
+      iconClass: "bg-amber-50 text-amber-700",
+    },
+    CONNECTED_INCOMPLETE: {
+      title: "Finish WhatsApp Business setup",
+      text: "Complete WhatsApp Business setup before sending messages to customers.",
+      action: "Continue Setup",
+      helper: "Messages are sent securely through Meta WhatsApp Cloud API.",
+      onAction: onContinueMeta,
+      iconClass: "bg-blue-50 text-blue-700",
+    },
+    TEMPORARILY_UNAVAILABLE: {
+      title: "WhatsApp connection is temporarily unavailable",
+      text: error || "We could not verify the WhatsApp connection right now.",
+      action: "Retry",
+      helper: "Messages are sent securely through Meta WhatsApp Cloud API.",
+      onAction: onRetryConnection,
+      iconClass: "bg-rose-50 text-rose-700",
+    },
+  };
+  const current = content[state] || content.NOT_CONNECTED;
+
+  return (
+    <div className="grid min-h-[460px] place-items-center p-5 text-center">
+      <div className="max-w-md">
+        <span className={`mx-auto grid h-16 w-16 place-items-center rounded-2xl ${current.iconClass}`}>
+          {state === "LOADING" ? <FiRefreshCw className="h-8 w-8 animate-spin" /> : <FiMessageCircle className="h-8 w-8" />}
+        </span>
+        <h3 className="mt-5 text-2xl font-black text-slate-950">{state === "LOADING" ? "Checking WhatsApp connection..." : current.title}</h3>
+        {state !== "LOADING" && <p className="mt-3 text-sm font-semibold leading-6 text-slate-500">{current.text}</p>}
+        {state !== "LOADING" && <p className="mt-2 text-xs font-bold text-slate-400">{current.helper}</p>}
+        {state !== "LOADING" && (
+          <button type="button" onClick={current.onAction} disabled={loading} className="mt-6 inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-[#1A1F71] px-5 text-sm font-black text-white hover:bg-[#14185a] disabled:bg-slate-300">
+            <FiZap />
+            {current.action}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SendOnWhatsAppModal({ draft, status, assets, selection, connectionCheck, onClose, onContinueMeta, onRetryConnection, onManageConnection }) {
+  const [step, setStep] = useState(0);
+  const [query, setQuery] = useState("");
+  const [selectedRecipientIds, setSelectedRecipientIds] = useState([]);
+  const [messageDraft, setMessageDraft] = useState({ caption: draft?.values?.whatsappText || whatsappMarketingDefaults.whatsappText, templateId: "", variables: {} });
+  const [consentConfirmed, setConsentConfirmed] = useState(false);
+  const [campaignResult, setCampaignResult] = useState({ loading: false, success: false, message: "", errors: [], prepared: null });
+  const [partyRecipients] = useState(() => loadPartyRecipients());
+  const approvedTemplates = assets.templates.filter((template) => template.status === "APPROVED");
+  const effectiveTemplateId = messageDraft.templateId || approvedTemplates[0]?.id || "";
+  const selectedMetaTemplate = approvedTemplates.find((template) => template.id === effectiveTemplateId);
+  const templateVariables = extractTemplateVariables(selectedMetaTemplate);
+  const renderedMessage = renderTemplateMessage(selectedMetaTemplate, messageDraft.variables, messageDraft.caption);
+  const selectedIds = new Set(selectedRecipientIds);
+  const filteredRecipients = partyRecipients.filter((recipient) => `${recipient.name} ${recipient.phone}`.toLowerCase().includes(query.trim().toLowerCase()));
+  const selectedRecipients = partyRecipients.filter((recipient) => selectedIds.has(recipient.id));
+  const canUseConnectedTemplates = Boolean(status.connected && approvedTemplates.length);
+  const connectionState = resolveSendConnectionState(status, assets, selection, connectionCheck);
+  const connectionReady = connectionState === "READY";
+
+  function toggleRecipient(recipient) {
+    setCampaignResult({ loading: false, success: false, message: "", errors: [], prepared: null });
+    setSelectedRecipientIds((current) => (current.includes(recipient.id) ? current.filter((id) => id !== recipient.id) : [...current, recipient.id]));
+  }
+
+  function toggleAllVisible() {
+    const visibleIds = filteredRecipients.map((recipient) => recipient.id);
+    const allVisibleSelected = visibleIds.length && visibleIds.every((id) => selectedIds.has(id));
+    setCampaignResult({ loading: false, success: false, message: "", errors: [], prepared: null });
+    setSelectedRecipientIds((current) => {
+      if (allVisibleSelected) return current.filter((id) => !visibleIds.includes(id));
+      return Array.from(new Set([...current, ...visibleIds]));
+    });
+  }
+
+  function campaignPayload() {
+    return {
+      creative: {
+        id: draft.template.id,
+        title: draft.template.title,
+        category: draft.template.category,
+        image: Boolean(draft.imagePreview),
+      },
+      recipients: selectedRecipients.map((recipient) => {
+        const phone = splitRecipientPhone(recipient);
+        return {
+          id: recipient.id,
+          name: recipient.name,
+          source: recipient.source,
+          countryCode: phone.countryCode,
+          phone: phone.phone,
+        };
+      }),
+      templateId: effectiveTemplateId,
+      variables: messageDraft.variables,
+      messagePreview: renderedMessage,
+      consentConfirmed,
+    };
+  }
+
+  async function handleValidateCampaign() {
+    setCampaignResult({ loading: true, success: false, message: "", errors: [], prepared: null });
+    try {
+      const response = await validateWhatsAppCampaign(campaignPayload());
+      setCampaignResult({ loading: false, success: true, message: "Ready to prepare. Full campaign delivery setup is pending.", errors: [], prepared: null });
+      return response;
+    } catch (error) {
+      const errors = error?.payload?.validation?.errors || [];
+      setCampaignResult({ loading: false, success: false, message: error?.payload?.message || error.message || "Campaign validation failed.", errors, prepared: null });
+      return null;
+    }
+  }
+
+  async function handlePrepareCampaign() {
+    setCampaignResult({ loading: true, success: false, message: "", errors: [], prepared: null });
+    try {
+      const response = await prepareWhatsAppCampaign(campaignPayload());
+      setCampaignResult({ loading: false, success: true, message: "Campaign preview prepared. Bulk delivery setup is pending.", errors: [], prepared: response.campaign });
+    } catch (error) {
+      const errors = error?.payload?.validation?.errors || [];
+      setCampaignResult({ loading: false, success: false, message: error?.payload?.message || error.message || "Campaign preparation failed.", errors, prepared: null });
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-[60] flex justify-end bg-slate-950/50">
+      <div className="flex h-full w-full max-w-3xl flex-col bg-white shadow-2xl">
+        <header className="flex shrink-0 items-center justify-between border-b border-slate-200 px-5 py-4">
+          <div>
+            <p className="text-xs font-black uppercase tracking-wide text-[#36A175]">Send on WhatsApp</p>
+            <h2 className="text-lg font-black text-slate-950">{draft.template.title}</h2>
+          </div>
+          <button type="button" onClick={onClose} className="grid h-9 w-9 place-items-center rounded-full text-slate-500 hover:bg-slate-100">
+            <FiX className="h-5 w-5" />
+          </button>
+        </header>
+
+        {connectionReady && (
+          <div className="flex gap-2 overflow-x-auto border-b border-slate-100 px-5 py-3">
+            {["Select Customers", "Choose Message", "Review"].map((label, index) => (
+              <button
+                key={label}
+                type="button"
+                onClick={() => setStep(index)}
+                className={`h-9 shrink-0 rounded-full px-4 text-xs font-black ${step === index ? "bg-[#1A1F71] text-white" : "bg-slate-100 text-slate-600"}`}
+              >
+                {index + 1}. {label}
+              </button>
+            ))}
+          </div>
+        )}
+
+        <div className="min-h-0 flex-1 overflow-y-auto p-5">
+          {!connectionReady && (
+            <SendConnectionGate
+              state={connectionState}
+              loading={connectionCheck.loading}
+              error={connectionCheck.error}
+              onContinueMeta={onContinueMeta}
+              onRetryConnection={onRetryConnection}
+              onManageConnection={onManageConnection}
+            />
+          )}
+
+          {connectionReady && step === 0 && (
+            <div className="space-y-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <h3 className="text-base font-black text-slate-950">Select customers</h3>
+                  <p className="mt-1 text-sm font-semibold text-slate-500">Using currently available Party/customer phone data.</p>
+                </div>
+                <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-black text-emerald-700">{selectedRecipients.length} selected</span>
+              </div>
+              <label className="flex h-11 items-center gap-3 rounded-xl border border-slate-200 bg-white px-4">
+                <FiSearch className="text-slate-400" />
+                <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search customers or phone numbers" className="min-w-0 flex-1 bg-transparent text-sm font-semibold outline-none" />
+              </label>
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                <button type="button" onClick={toggleAllVisible} disabled={!filteredRecipients.length} className="mb-3 h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs font-black text-slate-700 hover:bg-slate-50 disabled:text-slate-300">
+                  Select All
+                </button>
+                {filteredRecipients.length ? (
+                  <div className="max-h-[420px] space-y-2 overflow-y-auto">
+                    {filteredRecipients.map((recipient) => (
+                      <label key={recipient.id} className="flex cursor-pointer items-center gap-3 rounded-lg bg-white px-3 py-2 text-sm font-bold text-slate-700 hover:bg-emerald-50">
+                        <input type="checkbox" checked={selectedIds.has(recipient.id)} onChange={() => toggleRecipient(recipient)} className="h-4 w-4 accent-[#36A175]" />
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-slate-950">{recipient.name}</span>
+                          <span className="text-xs text-slate-500">{recipient.phone}</span>
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="grid min-h-[220px] place-items-center text-center">
+                    <div>
+                      <FiUsers className="mx-auto h-9 w-9 text-slate-300" />
+                      <p className="mt-2 text-sm font-black text-slate-700">No saved customers found</p>
+                      <p className="mt-1 max-w-sm text-xs font-semibold leading-5 text-slate-500">Customer/contact persistence and imports will be connected in the PostgreSQL phase.</p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {connectionReady && step === 1 && (
+            <div className="grid gap-5 lg:grid-cols-[1fr_260px]">
+              <div className="space-y-4">
+                <div>
+                  <h3 className="text-base font-black text-slate-950">Choose message</h3>
+                  <p className="mt-1 text-sm font-semibold text-slate-500">Use an approved WhatsApp template and fill customer-facing text.</p>
+                </div>
+                {!canUseConnectedTemplates && (
+                  <div className="rounded-xl border border-amber-100 bg-amber-50 p-4 text-sm font-bold leading-6 text-amber-800">
+                    Connect WhatsApp Business and load approved templates before sending.
+                  </div>
+                )}
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {approvedTemplates.map((template) => {
+                    const active = effectiveTemplateId === template.id;
+                    const headerFormat = templateHeaderFormat(template);
+                    return (
+                      <button
+                        key={template.id}
+                        type="button"
+                        onClick={() => {
+                          setMessageDraft((current) => ({ ...current, templateId: template.id, variables: {} }));
+                          setCampaignResult({ loading: false, success: false, message: "", errors: [], prepared: null });
+                        }}
+                        className={`rounded-xl border p-4 text-left transition ${active ? "border-[#1A1F71] bg-blue-50 ring-2 ring-blue-100" : "border-slate-200 bg-white hover:border-[#36A175]"}`}
+                      >
+                        <p className="text-sm font-black text-slate-950">{templateFriendlyName(template)}</p>
+                        <p className="mt-1 text-xs font-bold text-slate-500">{template.language || "Language not set"} {headerFormat ? `- ${headerFormat} header` : "- text body"}</p>
+                      </button>
+                    );
+                  })}
+                </div>
+                <textarea
+                  value={messageDraft.caption}
+                  onChange={(event) => setMessageDraft((current) => ({ ...current, caption: event.target.value }))}
+                  rows={4}
+                  placeholder="Write the message/caption customers should see."
+                  className="w-full resize-none rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold outline-none focus:border-[#36A175]"
+                />
+                {templateVariables.length > 0 && (
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    {templateVariables.map((variable) => (
+                      <label key={variable.key} className="block">
+                        <span className="mb-2 block text-xs font-black uppercase tracking-wide text-slate-500">Message field {variable.index}</span>
+                        <input
+                          value={messageDraft.variables[variable.key] || ""}
+                          onChange={(event) => {
+                            setMessageDraft((current) => ({ ...current, variables: { ...current.variables, [variable.key]: event.target.value } }));
+                            setCampaignResult({ loading: false, success: false, message: "", errors: [], prepared: null });
+                          }}
+                          placeholder={variable.componentType === "body" && variable.index === 1 ? messageDraft.caption || "Caption text" : `Value ${variable.index}`}
+                          className="h-10 w-full rounded-lg border border-slate-200 px-3 text-sm font-semibold outline-none focus:border-[#36A175]"
+                        />
+                      </label>
+                    ))}
+                  </div>
+                )}
+                <label className="flex items-start gap-2 rounded-lg bg-amber-50 p-3 text-xs font-bold leading-5 text-amber-800">
+                  <input type="checkbox" checked={consentConfirmed} onChange={(event) => setConsentConfirmed(event.target.checked)} className="mt-0.5 h-4 w-4 accent-[#36A175]" />
+                  I confirm these customers have opted in to receive WhatsApp messages.
+                </label>
+              </div>
+              <aside className="rounded-xl border border-slate-200 bg-emerald-50 p-4">
+                <p className="text-xs font-black uppercase tracking-wide text-emerald-700">Message preview</p>
+                <p className="mt-3 whitespace-pre-wrap text-sm font-semibold leading-6 text-slate-800">{renderedMessage || "Choose an approved template."}</p>
+              </aside>
+            </div>
+          )}
+
+          {connectionReady && step === 2 && (
+            <div className="grid gap-5 lg:grid-cols-[260px_1fr]">
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                <img src={draft.imagePreview || draft.template.image} alt={draft.template.title} className="max-h-[360px] w-full rounded-lg object-contain" />
+              </div>
+              <div className="space-y-4">
+                <div className="rounded-xl border border-slate-200 bg-white p-4">
+                  <p className="text-xs font-black uppercase tracking-wide text-slate-500">Customers</p>
+                  <p className="mt-1 text-3xl font-black text-slate-950">{selectedRecipients.length}</p>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-white p-4">
+                  <p className="text-xs font-black uppercase tracking-wide text-slate-500">Message</p>
+                  <p className="mt-2 whitespace-pre-wrap text-sm font-semibold leading-6 text-slate-700">{renderedMessage || "No message selected."}</p>
+                </div>
+                {campaignResult.message && (
+                  <div className={`rounded-xl p-4 text-sm font-bold leading-6 ${campaignResult.success ? "bg-emerald-50 text-emerald-700" : "bg-rose-50 text-rose-700"}`}>
+                    <p>{campaignResult.message}</p>
+                    {campaignResult.errors.map((error) => (
+                      <p key={`${error.code}-${error.message}`} className="mt-1">- {error.message}</p>
+                    ))}
+                  </div>
+                )}
+                <div className="flex flex-wrap gap-2">
+                  <button type="button" onClick={handleValidateCampaign} disabled={campaignResult.loading} className="h-10 rounded-lg border border-slate-200 bg-white px-4 text-sm font-black text-slate-700 hover:bg-slate-50 disabled:text-slate-300">
+                    Validate
+                  </button>
+                  <button type="button" onClick={handlePrepareCampaign} disabled={campaignResult.loading} className="h-10 rounded-lg bg-[#36A175] px-4 text-sm font-black text-white hover:bg-[#2c8a64] disabled:bg-slate-300">
+                    Prepare Preview
+                  </button>
+                  <button type="button" disabled className="h-10 rounded-lg bg-slate-200 px-4 text-sm font-black text-white">
+                    Bulk delivery setup pending
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {connectionReady && (
+          <footer className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t border-slate-200 px-5 py-4">
+            <p className="text-xs font-bold text-slate-500">Full campaign delivery will activate after customer database setup.</p>
+            <div className="flex gap-2">
+              <button type="button" onClick={() => setStep((current) => Math.max(0, current - 1))} disabled={step === 0} className="h-10 rounded-lg border border-slate-200 bg-white px-4 text-sm font-black text-slate-600 hover:bg-slate-50 disabled:text-slate-300">
+                Back
+              </button>
+              <button type="button" onClick={() => setStep((current) => Math.min(2, current + 1))} disabled={step === 2} className="h-10 rounded-lg bg-[#1A1F71] px-4 text-sm font-black text-white hover:bg-[#14185a] disabled:bg-slate-300">
+                Next
+              </button>
+            </div>
+          </footer>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function PersonalizeModal({ template, onClose, onSendWhatsApp }) {
   const fileInputRef = useRef(null);
   const [values, setValues] = useState(whatsappMarketingDefaults);
   const [logoPreview, setLogoPreview] = useState("");
@@ -1630,12 +1759,23 @@ function PersonalizeModal({ template, onClose }) {
     setStatus("Image sharing is unavailable here, so WhatsApp text sharing was opened.");
   };
 
+  const handleSendOnWhatsApp = async () => {
+    setStatus("");
+    const canvas = await composeImage();
+    onSendWhatsApp({
+      template,
+      values,
+      imagePreview: canvas.toDataURL("image/png"),
+    });
+    setStatus("Prepared WhatsApp send preview.");
+  };
+
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/60 p-3 sm:p-4">
       <div className="flex h-[84vh] max-h-[860px] w-[min(92vw,1240px)] flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
         <div className="flex shrink-0 items-center justify-between border-b border-slate-200 px-6 py-4">
           <div>
-            <p className="text-xs font-black uppercase tracking-wide text-[#6D4AFF]">Share & Download</p>
+            <p className="text-xs font-black uppercase tracking-wide text-[#6D4AFF]">Share, Download & Send</p>
             <h2 className="text-lg font-bold leading-tight text-slate-900">{template.title}</h2>
           </div>
           <button type="button" onClick={onClose} className="grid h-9 w-9 place-items-center rounded-full text-slate-500 hover:bg-slate-100">
@@ -1692,6 +1832,10 @@ function PersonalizeModal({ template, onClose }) {
         </div>
 
         <div className="flex shrink-0 flex-wrap justify-end gap-3 border-t border-slate-200 px-6 py-4">
+          <button type="button" onClick={handleSendOnWhatsApp} className="inline-flex h-10 items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 text-sm font-bold text-emerald-700 hover:bg-emerald-100">
+            <FiSend className="h-4 w-4" />
+            Send on WhatsApp
+          </button>
           <button type="button" onClick={handleShare} className="inline-flex h-10 items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 text-sm font-bold text-slate-700 hover:bg-slate-50">
             <FiShare2 className="h-4 w-4" />
             Share
@@ -1744,6 +1888,7 @@ function WhatsAppMarketing() {
   const [activeSubcategory, setActiveSubcategory] = useState("All");
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedTemplate, setSelectedTemplate] = useState(null);
+  const [sendDraft, setSendDraft] = useState(null);
   const [whatsappStatus, setWhatsAppStatus] = useState({
     loading: true,
     configured: true,
@@ -1762,8 +1907,10 @@ function WhatsAppMarketing() {
   const [showConnectionPanel, setShowConnectionPanel] = useState(Boolean(callbackNotice.error));
   const [connectionStatusUnavailable, setConnectionStatusUnavailable] = useState(false);
   const [productionConnectionError, setProductionConnectionError] = useState(callbackNotice.error);
+  const [sendConnectionCheck, setSendConnectionCheck] = useState({ loading: false, error: "" });
   const [testForm, setTestForm] = useState({ countryCode: "+91", phoneNumber: "", optInConfirmed: false, variables: {} });
   const [sendState, setSendState] = useState({ loading: false, success: false, message: "", messageId: "" });
+  const connectionPanelRef = useRef(null);
 
   const filteredTemplates = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
@@ -1783,7 +1930,7 @@ function WhatsAppMarketing() {
       .then((status) => {
         if (!active) return null;
         setConnectionStatusUnavailable(false);
-        setWhatsAppStatus({ ...status, loading: false });
+        setWhatsAppStatus((current) => mergeWhatsAppStatus(current, { ...status, loading: false }));
         setWhatsAppAssets(status.assets || emptyWhatsAppAssets());
         setWhatsAppSelection(status.selection || emptyWhatsAppSelection());
         setWhatsAppError((current) => current || status.lastError || "");
@@ -1792,7 +1939,7 @@ function WhatsAppMarketing() {
       })
       .then((assetsStatus) => {
         if (!active || !assetsStatus) return;
-        setWhatsAppStatus({ ...assetsStatus, loading: false });
+        setWhatsAppStatus((current) => mergeWhatsAppStatus(current, { ...assetsStatus, loading: false }));
         setWhatsAppAssets(assetsStatus.assets || emptyWhatsAppAssets());
         setWhatsAppSelection(assetsStatus.selection || emptyWhatsAppSelection());
       })
@@ -1801,7 +1948,7 @@ function WhatsAppMarketing() {
         const expectedConnectionState = isWhatsAppAuthOrDisconnectedError(statusError) || isWhatsAppConfigError(statusError);
         setConnectionStatusUnavailable(!expectedConnectionState);
         if (statusError.payload) {
-          setWhatsAppStatus({ ...statusError.payload, loading: false });
+          setWhatsAppStatus((current) => mergeWhatsAppStatus(current, { ...statusError.payload, loading: false }));
           setWhatsAppAssets(statusError.payload.assets || emptyWhatsAppAssets());
           setWhatsAppSelection(statusError.payload.selection || emptyWhatsAppSelection());
         } else {
@@ -1829,7 +1976,7 @@ function WhatsAppMarketing() {
         nextStatus = await getWhatsAppAssets({ businessId: selection.businessId || status.selection?.businessId, wabaId: selection.wabaId || status.selection?.wabaId });
       }
 
-      setWhatsAppStatus({ ...nextStatus, loading: false });
+      setWhatsAppStatus((current) => mergeWhatsAppStatus(current, { ...nextStatus, loading: false }));
       setWhatsAppAssets(nextStatus.assets || emptyWhatsAppAssets());
       setWhatsAppSelection(nextStatus.selection || emptyWhatsAppSelection());
       setConnectionStatusUnavailable(false);
@@ -1838,7 +1985,7 @@ function WhatsAppMarketing() {
       const expectedConnectionState = isWhatsAppAuthOrDisconnectedError(requestError) || isWhatsAppConfigError(requestError);
       setConnectionStatusUnavailable(!expectedConnectionState);
       if (requestError.payload) {
-        setWhatsAppStatus({ ...requestError.payload, loading: false });
+        setWhatsAppStatus((current) => mergeWhatsAppStatus(current, { ...requestError.payload, loading: false }));
         setWhatsAppAssets(requestError.payload.assets || emptyWhatsAppAssets());
         setWhatsAppSelection(requestError.payload.selection || emptyWhatsAppSelection());
       }
@@ -1858,7 +2005,7 @@ function WhatsAppMarketing() {
     try {
       const status = await getWhatsAppConnectionStatus();
       if (!status.embeddedSignupConfigured && !status.oauthConfigured) {
-        setWhatsAppStatus({ ...status, loading: false });
+        setWhatsAppStatus((current) => mergeWhatsAppStatus(current, { ...status, loading: false }));
         setWhatsAppAssets(status.assets || emptyWhatsAppAssets());
         setWhatsAppSelection(status.selection || emptyWhatsAppSelection());
         setProductionConnectionError("Production Meta WhatsApp onboarding is not configured on the backend.");
@@ -1869,7 +2016,7 @@ function WhatsAppMarketing() {
       if (status.embeddedSignupConfigured) {
         const signup = await startWhatsAppEmbeddedSignup(status.embeddedSignup);
         const connected = await completeWhatsAppEmbeddedSignup(signup);
-        setWhatsAppStatus({ ...connected, loading: false });
+        setWhatsAppStatus((current) => mergeWhatsAppStatus(current, { ...connected, loading: false }));
         setWhatsAppAssets(connected.assets || emptyWhatsAppAssets());
         setWhatsAppSelection(connected.selection || emptyWhatsAppSelection());
         setWhatsAppToast("WhatsApp Business connected.");
@@ -1883,7 +2030,7 @@ function WhatsAppMarketing() {
       const expectedConnectionState = isWhatsAppAuthOrDisconnectedError(requestError) || isWhatsAppConfigError(requestError);
       setConnectionStatusUnavailable(isApiError && !expectedConnectionState);
       if (requestError.payload) {
-        setWhatsAppStatus({ ...requestError.payload, loading: false });
+        setWhatsAppStatus((current) => mergeWhatsAppStatus(current, { ...requestError.payload, loading: false }));
         setWhatsAppAssets(requestError.payload.assets || emptyWhatsAppAssets());
         setWhatsAppSelection(requestError.payload.selection || emptyWhatsAppSelection());
       }
@@ -1903,7 +2050,7 @@ function WhatsAppMarketing() {
     try {
       const status = await getWhatsAppConnectionStatus();
       if (!status.testModeConfigured) {
-        setWhatsAppStatus({ ...status, loading: false });
+        setWhatsAppStatus((current) => mergeWhatsAppStatus(current, { ...status, loading: false }));
         setWhatsAppAssets(status.assets || emptyWhatsAppAssets());
         setWhatsAppSelection(status.selection || emptyWhatsAppSelection());
         setWhatsAppError("Meta WhatsApp test setup environment values are missing on the backend.");
@@ -1912,7 +2059,7 @@ function WhatsAppMarketing() {
       }
 
       const testConnection = await connectWhatsAppTestMode();
-      setWhatsAppStatus({ ...testConnection, loading: false });
+      setWhatsAppStatus((current) => mergeWhatsAppStatus(current, { ...testConnection, loading: false }));
       setWhatsAppAssets(testConnection.assets || emptyWhatsAppAssets());
       setWhatsAppSelection(testConnection.selection || emptyWhatsAppSelection());
       setWhatsAppToast("Meta WhatsApp test setup loaded.");
@@ -1943,12 +2090,12 @@ function WhatsAppMarketing() {
           templateId: nextSelection.templateId,
         };
         const saved = await saveWhatsAppSelection(scopedSelection);
-        setWhatsAppStatus({ ...saved, loading: false });
+        setWhatsAppStatus((current) => mergeWhatsAppStatus(current, { ...saved, loading: false }));
         setWhatsAppAssets(saved.assets || refreshed.assets || emptyWhatsAppAssets());
         setWhatsAppSelection(saved.selection || scopedSelection);
       } catch (requestError) {
         if (requestError.payload) {
-          setWhatsAppStatus({ ...requestError.payload, loading: false });
+          setWhatsAppStatus((current) => mergeWhatsAppStatus(current, { ...requestError.payload, loading: false }));
           setWhatsAppAssets(requestError.payload.assets || emptyWhatsAppAssets());
           setWhatsAppSelection(requestError.payload.selection || emptyWhatsAppSelection());
         }
@@ -1961,13 +2108,13 @@ function WhatsAppMarketing() {
 
     saveWhatsAppSelection(nextSelection)
       .then((saved) => {
-        setWhatsAppStatus({ ...saved, loading: false });
+        setWhatsAppStatus((current) => mergeWhatsAppStatus(current, { ...saved, loading: false }));
         setWhatsAppAssets(saved.assets || emptyWhatsAppAssets());
         setWhatsAppSelection(saved.selection || emptyWhatsAppSelection());
       })
       .catch((requestError) => {
         if (requestError.payload) {
-          setWhatsAppStatus({ ...requestError.payload, loading: false });
+          setWhatsAppStatus((current) => mergeWhatsAppStatus(current, { ...requestError.payload, loading: false }));
           setWhatsAppAssets(requestError.payload.assets || emptyWhatsAppAssets());
           setWhatsAppSelection(requestError.payload.selection || emptyWhatsAppSelection());
         }
@@ -1981,7 +2128,7 @@ function WhatsAppMarketing() {
 
     try {
       const saved = await saveWhatsAppSelection(whatsappSelection);
-      setWhatsAppStatus({ ...saved, loading: false });
+      setWhatsAppStatus((current) => mergeWhatsAppStatus(current, { ...saved, loading: false }));
       setWhatsAppAssets(saved.assets || emptyWhatsAppAssets());
       setWhatsAppSelection(saved.selection || emptyWhatsAppSelection());
       setWhatsAppToast("WhatsApp Business selection saved.");
@@ -1998,7 +2145,7 @@ function WhatsAppMarketing() {
 
     try {
       const disconnected = await disconnectWhatsAppBusiness();
-      setWhatsAppStatus({ ...disconnected, loading: false });
+      setWhatsAppStatus((current) => mergeWhatsAppStatus(current, { ...disconnected, loading: false }));
       setWhatsAppAssets(disconnected.assets || emptyWhatsAppAssets());
       setWhatsAppSelection(disconnected.selection || emptyWhatsAppSelection());
       setSendState({ loading: false, success: false, message: "", messageId: "" });
@@ -2021,7 +2168,7 @@ function WhatsAppMarketing() {
         optInConfirmed: testForm.optInConfirmed,
         variables: testForm.variables,
       });
-      setWhatsAppStatus({ ...response, loading: false });
+      setWhatsAppStatus((current) => mergeWhatsAppStatus(current, { ...response, loading: false }));
       setWhatsAppAssets(response.assets || emptyWhatsAppAssets());
       setWhatsAppSelection(response.selection || emptyWhatsAppSelection());
       setSendState({
@@ -2034,7 +2181,7 @@ function WhatsAppMarketing() {
       const errorMessage = formatWhatsAppRequestError(requestError, "WhatsApp test message failed.");
       setSendState({ loading: false, success: false, message: errorMessage, messageId: "" });
       if (requestError.payload) {
-        setWhatsAppStatus({ ...requestError.payload, loading: false });
+        setWhatsAppStatus((current) => mergeWhatsAppStatus(current, { ...requestError.payload, loading: false }));
         setWhatsAppAssets(requestError.payload.assets || emptyWhatsAppAssets());
         setWhatsAppSelection(requestError.payload.selection || emptyWhatsAppSelection());
       }
@@ -2044,16 +2191,59 @@ function WhatsAppMarketing() {
   const connectionReadiness = resolveWhatsAppReadiness(whatsappStatus, whatsappAssets, whatsappSelection);
   const campaignsUnlocked = connectionReadiness.readyToSend;
   const configurationError = whatsappStatus.configured === false && !whatsappStatus.embeddedSignupConfigured && !whatsappStatus.oauthConfigured;
+  const developerToolsEnabled = canShowWhatsAppDeveloperTools(whatsappStatus);
+
+  function applyWhatsAppConnectionState(connection) {
+    setWhatsAppStatus((current) => mergeWhatsAppStatus(current, { ...connection, loading: false }));
+    setWhatsAppAssets(connection.assets || emptyWhatsAppAssets());
+    setWhatsAppSelection(connection.selection || emptyWhatsAppSelection());
+  }
+
+  async function checkSendWhatsAppConnection() {
+    setSendConnectionCheck({ loading: true, error: "" });
+    try {
+      const connection = await getWhatsAppConnection();
+      applyWhatsAppConnectionState(connection);
+      setSendConnectionCheck({ loading: false, error: "" });
+      return connection;
+    } catch (error) {
+      if (error.payload) applyWhatsAppConnectionState(error.payload);
+      setSendConnectionCheck({
+        loading: false,
+        error: formatWhatsAppRequestError(error, "Unable to verify WhatsApp Business connection."),
+      });
+      return null;
+    }
+  }
+
+  function handleOpenWhatsAppSend(draft) {
+    setSendDraft(draft);
+    setSelectedTemplate(null);
+    checkSendWhatsAppConnection();
+  }
+
+  async function handleSendDrawerContinueMeta() {
+    await handleContinueWithMeta();
+    await checkSendWhatsAppConnection();
+  }
+
+  function openWhatsAppConnectionPanel({ closeSendDrawer = false } = {}) {
+    setShowConnectionPanel(true);
+    if (closeSendDrawer) setSendDraft(null);
+    window.setTimeout(() => {
+      connectionPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 0);
+  }
 
   const renderDeveloperTools = () => (
-    <section className="space-y-3">
+    <section ref={connectionPanelRef} className="space-y-3">
       <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <p className="text-sm font-black text-slate-950">Developer/Test Tools</p>
-          <p className="text-xs font-semibold leading-5 text-slate-500">Meta test setup, diagnostics, and one-recipient Cloud API test send.</p>
+          <p className="text-sm font-black text-slate-950">Manage Connection</p>
+          <p className="text-xs font-semibold leading-5 text-slate-500">Review WhatsApp connection status, reload configuration, reconnect, or disconnect.</p>
         </div>
         <button type="button" onClick={() => setShowConnectionPanel(false)} className="h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs font-black text-slate-600 hover:bg-slate-50">
-          Hide Tools
+          Hide
         </button>
       </div>
       <WhatsAppBusinessPanel
@@ -2072,6 +2262,7 @@ function WhatsAppMarketing() {
         onSendTest={handleSendTestWhatsApp}
         testForm={testForm}
         setTestForm={setTestForm}
+        developerToolsEnabled={developerToolsEnabled}
       />
     </section>
   );
@@ -2085,105 +2276,124 @@ function WhatsAppMarketing() {
             <h1 className="mt-1 text-2xl font-black text-slate-950">WhatsApp Marketing</h1>
             <p className="mt-1 text-sm text-slate-500">Personalize ready posters and share them with customers.</p>
           </div>
-          {campaignsUnlocked && (
-            <label className="flex h-11 min-w-0 items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-4 shadow-sm xl:w-[420px]">
-              <FiSearch className="h-4 w-4 text-slate-400" />
-              <input
-                value={searchQuery}
-                onChange={(event) => setSearchQuery(event.target.value)}
-                placeholder="Search posters"
-                className="min-w-0 flex-1 bg-transparent text-sm outline-none"
-              />
-            </label>
-          )}
+          <label className="flex h-11 min-w-0 items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-4 shadow-sm xl:w-[420px]">
+            <FiSearch className="h-4 w-4 text-slate-400" />
+            <input
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder="Search posters"
+              className="min-w-0 flex-1 bg-transparent text-sm outline-none"
+            />
+          </label>
         </div>
       </header>
 
       <main className="space-y-5 p-5">
         {whatsappToast && <div className="rounded-lg border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm font-black text-emerald-700">{whatsappToast}</div>}
 
-        {whatsappStatus.loading ? (
+        {whatsappStatus.loading && (
           <section className="grid min-h-[420px] place-items-center rounded-2xl border border-slate-200 bg-white p-6 text-center shadow-sm">
             <div>
               <FiRefreshCw className="mx-auto h-9 w-9 animate-spin text-slate-300" />
               <p className="mt-4 text-sm font-black text-slate-700">Checking WhatsApp connection...</p>
             </div>
           </section>
-        ) : connectionStatusUnavailable ? (
+        )}
+
+        {!whatsappStatus.loading && connectionStatusUnavailable && (
           <WhatsAppConnectionUnavailable error={whatsappError} onRetry={() => refreshWhatsAppConnection()} loading={whatsappLoading} />
-        ) : configurationError ? (
+        )}
+
+        {!whatsappStatus.loading && !connectionStatusUnavailable && configurationError && (
           <>
-            <WhatsAppConfigurationError onManageConnection={() => setShowConnectionPanel(true)} />
+            <WhatsAppConfigurationError onManageConnection={openWhatsAppConnectionPanel} />
             {showConnectionPanel && renderDeveloperTools()}
-          </>
-        ) : !whatsappStatus.connected ? (
-          <>
-            <WhatsAppOnboarding status={whatsappStatus} loading={whatsappLoading} onContinueMeta={handleContinueWithMeta} productionConnectionError={productionConnectionError} />
-            {whatsappStatus.testModeConfigured && <WhatsAppTestModeStarter status={whatsappStatus} loading={whatsappLoading} error={whatsappError} onTestConnect={handleConnectWhatsAppTestMode} />}
-            {showConnectionPanel && renderDeveloperTools()}
-          </>
-        ) : !campaignsUnlocked ? (
-          <>
-            <WhatsAppSetupIncomplete readiness={connectionReadiness} assets={whatsappAssets} selection={whatsappSelection} onManageConnection={() => setShowConnectionPanel(true)} />
-            {showConnectionPanel && renderDeveloperTools()}
-          </>
-        ) : (
-          <>
-            <WhatsAppConnectedBar status={whatsappStatus} assets={whatsappAssets} selection={whatsappSelection} onManageConnection={() => setShowConnectionPanel((current) => !current)} />
-            {showConnectionPanel && renderDeveloperTools()}
-
-            <WhatsAppCampaignBuilder status={whatsappStatus} assets={whatsappAssets} onOpenConnection={() => setShowConnectionPanel((current) => !current)} />
-
-            <section>
-              <div>
-                <p className="text-sm font-bold text-[#36A175]">Marketing Creatives / Posters</p>
-                <h2 className="mt-1 text-xl font-black text-slate-950">Poster templates</h2>
-                <p className="mt-1 text-sm text-slate-500">These are share/download creatives, separate from approved WhatsApp message templates.</p>
-              </div>
-            </section>
-
-            <section className="space-y-3">
-              <div className="flex gap-2.5 overflow-x-auto pb-1">
-                {whatsappMarketingCategories.map((category) => (
-                  <button
-                    key={category}
-                    type="button"
-                    onClick={() => setActiveCategory(category)}
-                    className={`h-10 shrink-0 rounded-full px-4 text-sm font-bold transition ${
-                      activeCategory === category ? "bg-[#1A1F71] text-white shadow-sm" : "bg-white text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50"
-                    }`}
-                  >
-                    {category}
-                  </button>
-                ))}
-              </div>
-
-              <div className="flex gap-2 overflow-x-auto pb-1">
-                {whatsappMarketingSubcategories.map((subcategory) => (
-                  <button
-                    key={subcategory}
-                    type="button"
-                    onClick={() => setActiveSubcategory(subcategory)}
-                    className={`h-8 shrink-0 rounded-lg px-3 text-xs font-bold transition ${
-                      activeSubcategory === subcategory ? "bg-[#36A175] text-white shadow-sm" : "bg-white text-slate-500 ring-1 ring-slate-200 hover:bg-slate-50"
-                    }`}
-                  >
-                    {subcategory}
-                  </button>
-                ))}
-              </div>
-            </section>
-
-            <section className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
-              {filteredTemplates.map((template) => (
-                <TemplateCard key={template.id} template={template} onSelect={setSelectedTemplate} />
-              ))}
-            </section>
           </>
         )}
+
+        {!whatsappStatus.loading && !connectionStatusUnavailable && !configurationError && !whatsappStatus.connected && (
+          <>
+            <WhatsAppOnboarding status={whatsappStatus} loading={whatsappLoading} onContinueMeta={handleContinueWithMeta} productionConnectionError={productionConnectionError} />
+            {developerToolsEnabled && <WhatsAppTestModeStarter status={whatsappStatus} loading={whatsappLoading} error={whatsappError} onTestConnect={handleConnectWhatsAppTestMode} />}
+            {showConnectionPanel && renderDeveloperTools()}
+          </>
+        )}
+
+        {!whatsappStatus.loading && !connectionStatusUnavailable && !configurationError && whatsappStatus.connected && !campaignsUnlocked && (
+          <>
+            <WhatsAppSetupIncomplete readiness={connectionReadiness} assets={whatsappAssets} selection={whatsappSelection} onManageConnection={openWhatsAppConnectionPanel} />
+            {showConnectionPanel && renderDeveloperTools()}
+          </>
+        )}
+
+        {!whatsappStatus.loading && !connectionStatusUnavailable && !configurationError && whatsappStatus.connected && campaignsUnlocked && (
+          <>
+            <WhatsAppConnectedBar status={whatsappStatus} assets={whatsappAssets} selection={whatsappSelection} onManageConnection={openWhatsAppConnectionPanel} />
+            {showConnectionPanel && renderDeveloperTools()}
+          </>
+        )}
+
+        <section>
+          <div>
+            <p className="text-sm font-bold text-[#36A175]">Marketing Creatives / Posters</p>
+            <h2 className="mt-1 text-xl font-black text-slate-950">Poster templates</h2>
+            <p className="mt-1 text-sm text-slate-500">Click a poster to customize, download, share, or prepare WhatsApp sending.</p>
+          </div>
+        </section>
+
+        <section className="space-y-3">
+          <div className="flex gap-2.5 overflow-x-auto pb-1">
+            {whatsappMarketingCategories.map((category) => (
+              <button
+                key={category}
+                type="button"
+                onClick={() => setActiveCategory(category)}
+                className={`h-10 shrink-0 rounded-full px-4 text-sm font-bold transition ${
+                  activeCategory === category ? "bg-[#1A1F71] text-white shadow-sm" : "bg-white text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50"
+                }`}
+              >
+                {category}
+              </button>
+            ))}
+          </div>
+
+          <div className="flex gap-2 overflow-x-auto pb-1">
+            {whatsappMarketingSubcategories.map((subcategory) => (
+              <button
+                key={subcategory}
+                type="button"
+                onClick={() => setActiveSubcategory(subcategory)}
+                className={`h-8 shrink-0 rounded-lg px-3 text-xs font-bold transition ${
+                  activeSubcategory === subcategory ? "bg-[#36A175] text-white shadow-sm" : "bg-white text-slate-500 ring-1 ring-slate-200 hover:bg-slate-50"
+                }`}
+              >
+                {subcategory}
+              </button>
+            ))}
+          </div>
+        </section>
+
+        <section className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+          {filteredTemplates.map((template) => (
+            <TemplateCard key={template.id} template={template} onSelect={setSelectedTemplate} />
+          ))}
+        </section>
       </main>
 
-      {selectedTemplate && <PersonalizeModal template={selectedTemplate} onClose={() => setSelectedTemplate(null)} />}
+      {selectedTemplate && <PersonalizeModal template={selectedTemplate} onClose={() => setSelectedTemplate(null)} onSendWhatsApp={handleOpenWhatsAppSend} />}
+      {sendDraft && (
+        <SendOnWhatsAppModal
+          draft={sendDraft}
+          status={whatsappStatus}
+          assets={whatsappAssets}
+          selection={whatsappSelection}
+          connectionCheck={sendConnectionCheck}
+          onClose={() => setSendDraft(null)}
+          onContinueMeta={handleSendDrawerContinueMeta}
+          onRetryConnection={checkSendWhatsAppConnection}
+          onManageConnection={() => openWhatsAppConnectionPanel({ closeSendDrawer: true })}
+        />
+      )}
     </div>
   );
 }
