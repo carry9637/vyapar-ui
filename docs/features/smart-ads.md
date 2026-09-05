@@ -4,7 +4,7 @@
 
 - Smart Ads lets a business prepare Meta/Facebook ad campaigns from uploaded creatives, uploaded videos, Marketing Studio designs, or existing inventory item images.
 - The current frontend/demo version supports dashboard, 5-step ad creation, real Meta OAuth, real asset discovery, and real paused Meta image/video object publishing.
-- Real analytics, durable database persistence, and final production delivery verification are later production work.
+- Live account Insights reads are implemented; durable database persistence and final production delivery verification remain future work.
 
 ## Current User Flow
 
@@ -22,7 +22,19 @@ Smart Ads Dashboard -> Connect Meta -> Meta OAuth -> Fetch Business/Page/Instagr
 - Selected item image/name/category/price/unit stay synchronized from the shared inventory item source.
 - Audience prototype supports location, Pan India, gender, age, interests, and validation.
 - Budget/duration calculation, schedule fields, review summary, publish validation, and detailed publish errors are implemented.
-- Metrics and campaign analytics are still local/demo, not Meta Insights.
+- Dashboard metrics read Meta Insights; campaign count is explicitly browser-local, and unsynced per-campaign placeholder metrics are hidden.
+
+## Account Insights
+
+- Flow: dashboard -> `getMetaAdsInsights` -> `GET /api/meta/ads/insights?datePreset=last_7d|last_30d` -> `fetchMetaAdsInsights` -> `/{configured-version}/act_{selected-account-id}/insights`.
+- Reuses the server-held token and saved/discovered Ad Account; requires `ads_read` or `ads_management`, without requiring a Page for reporting.
+- Requests reach, impressions, clicks, spend, actions, account currency/name/ID and reporting dates at account level for the entire range. Includes all account ads, not only local campaigns; reach is never summed across days.
+- Leads uses only `actions[action_type=lead].value`; missing aggregate is unavailable (`null`). Subtypes and unrelated actions are not added together. Spend uses the Meta account currency.
+- Auto-fetches on connection/saved selection changes and dashboard return; supports date selection and refresh. Loading, no-account, disconnected, no-activity, authorization, permission and retry states are distinct; errors never become zero metrics.
+- Valid Meta empty data produces no activity; malformed responses fail clearly. Old account/date results are hidden during changes and pending frontend requests are cancelled/timed out.
+- Changed: `SmartAds.jsx` (cards/states), `smartAdsMetaService.js` (API client), `server/src/routes/metaAds.js` (read endpoint). Created: `server/src/services/metaAdsInsightsService.js` (normalization) and its `.test.js` (isolated route/Meta-response tests).
+- Validation uses controlled responses; live non-zero metrics still require the company's account with delivered activity. No live billing-account verification is claimed. PostgreSQL historical snapshots, tenant isolation and scheduled Insights sync remain future work.
+- API reference: [Meta-maintained Insights fields](https://github.com/facebook/facebook-python-business-sdk/blob/main/facebook_business/adobjects/adsinsights.py) and [Meta Marketing API examples](https://www.postman.com/meta/facebook-marketing-api/documentation/0zr4mes/facebook-marketing-api-mapi).
 
 ## Backend / Meta Integration Status
 
@@ -85,7 +97,7 @@ Smart Ads Dashboard -> Connect Meta -> Meta OAuth -> Fetch Business/Page/Instagr
 ## Production Pending
 
 - Add PostgreSQL persistence, encrypted token storage, tenant isolation, and durable campaign/asset records.
-- Add real Meta Insights sync, campaign status refresh, retry/cleanup for partial publishes, and audit logs.
+- Add durable scheduled Insights sync/history, campaign-level reporting/status refresh, retry/cleanup for partial publishes, and audit logs.
 - Add production-grade location/interest targeting search using Meta targeting IDs.
 - Complete final live image and video publish verification with a payment-enabled production Ad Account; confirm Meta accepts generated video thumbnail image hashes end-to-end.
 - Confirm required Meta permissions/access tiers and business asset roles for external client use after App Review.
@@ -100,4 +112,4 @@ Smart Ads Dashboard -> Connect Meta -> Meta OAuth -> Fetch Business/Page/Instagr
 
 ## Manager Explanation
 
-Smart Ads is now beyond a static demo: it can connect to Meta, fetch real business assets, and start the real paused ad publishing flow. The current app is blocked externally by a Meta test Ad Account payment-method requirement before final Ad delivery can be verified. We still need PostgreSQL, encrypted token storage, real Insights, status sync, and production account validation before calling it fully production-ready.
+Smart Ads can connect to Meta, fetch business assets, create paused ads and request real account Insights. Accounts without activity show an empty state. The company account is still needed to verify non-zero metrics and final delivery. PostgreSQL, encrypted token storage, tenant isolation and status/history sync remain pending.

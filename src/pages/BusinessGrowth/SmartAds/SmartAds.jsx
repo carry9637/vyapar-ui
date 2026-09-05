@@ -28,6 +28,7 @@ import { getSessionDesigns } from "../../../services/marketingStudio/sessionDesi
 import { calculateInventoryItemPricing, getInventoryItems } from "../../../services/itemsStorage";
 import {
   disconnectMeta,
+  getMetaAdsInsights,
   getMetaAssets,
   getMetaConnectionStatus,
   publishMetaCampaign,
@@ -527,13 +528,15 @@ function objectiveLabel(value) {
   return goalOptions.find((goal) => goal.id === value)?.label || value;
 }
 
-function MetricCard({ icon: Icon, label, value, helper }) {
+function MetricCard({ icon: Icon, label, value, helper, loading = false }) {
   return (
     <Card className="p-4 shadow-sm">
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="text-xs font-bold uppercase tracking-wide text-slate-500">{label}</p>
-          <p className="mt-2 text-2xl font-black text-slate-950">{value}</p>
+          <p className="mt-2 min-h-8 break-words text-2xl font-black text-slate-950" aria-busy={loading}>
+            {loading ? <span className="inline-block h-7 w-20 animate-pulse rounded bg-slate-200" aria-label="Loading metric" /> : value}
+          </p>
           {helper && <p className="mt-1 text-xs font-semibold text-slate-500">{helper}</p>}
         </div>
         <span className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-blue-50 text-blue-600">
@@ -541,6 +544,90 @@ function MetricCard({ icon: Icon, label, value, helper }) {
         </span>
       </div>
     </Card>
+  );
+}
+
+function MetaInsights({ status, connectionError, campaignCount, onConnect, onRefresh }) {
+  const [datePreset, setDatePreset] = useState("last_30d");
+  const [retry, setRetry] = useState(0);
+  const [result, setResult] = useState(null);
+  const accountId = status.selection?.adAccountId;
+
+  useEffect(() => {
+    if (status.loading || !status.connected || !accountId) return;
+    const controller = new AbortController();
+    let active = true;
+    const timeout = setTimeout(() => controller.abort(), 25000);
+    getMetaAdsInsights({ datePreset, signal: controller.signal })
+      .then((data) => {
+        if (active) setResult({ data, status, datePreset, retry });
+      })
+      .catch((error) => {
+        if (active) setResult({
+          status, datePreset, retry,
+          data: { state: error.payload?.state || "API_ERROR", message: error.name === "AbortError" ? "Meta Insights took too long. Please retry." : error.message },
+        });
+      })
+      .finally(() => clearTimeout(timeout));
+    return () => { active = false; clearTimeout(timeout); controller.abort(); };
+  }, [status, accountId, datePreset, retry]);
+
+  // Hide the old account/range immediately, including while the next request is starting.
+  const data = result?.status === status && result?.datePreset === datePreset && result?.retry === retry ? result.data : null;
+  const state = status.loading ? "LOADING" : !status.connected ? (connectionError ? "CONNECTION_ERROR" : "NOT_CONNECTED") : !accountId ? "NO_AD_ACCOUNT" : data?.state || "LOADING";
+  const available = ["DATA", "NO_ACTIVITY"].includes(state);
+  const metric = (key) => available && data.metrics[key] !== null ? data.metrics[key].toLocaleString("en-IN") : "--";
+  const currency = data?.account?.currency;
+  let spend = metric("spend");
+  if (available && currency) {
+    try { spend = new Intl.NumberFormat("en-IN", { style: "currency", currency }).format(data.metrics.spend); }
+    catch { spend = `${currency} ${spend}`; }
+  }
+  const message = {
+    LOADING: "Loading Meta advertising activity...",
+    NOT_CONNECTED: "Connect Meta to view advertising activity.",
+    NO_AD_ACCOUNT: "Select an Ad Account in Meta connection settings.",
+    AUTH_ERROR: "Meta authorization expired or was revoked. Reconnect Meta.",
+    PERMISSION_REQUIRED: "Advertising read access is required. Check your account permissions and reconnect Meta.",
+    NO_ACTIVITY: "No ad activity yet for this date range.",
+    CONNECTION_ERROR: connectionError,
+  }[state] || data?.message;
+  const reconnect = ["NOT_CONNECTED", "AUTH_ERROR", "PERMISSION_REQUIRED"].includes(state);
+
+  return (
+    <section className="space-y-3" aria-label="Meta account insights">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0 text-sm font-bold text-slate-600">
+          <p className="break-words">{available ? `Ad Account: ${data.account.name}` : "Ad Account activity"}</p>
+          {available && data.dateStart && <p className="text-xs font-semibold">{data.dateStart} to {data.dateStop}</p>}
+        </div>
+        <div className="flex items-center gap-2">
+          <select aria-label="Insights date range" value={datePreset} onChange={(event) => setDatePreset(event.target.value)} className="h-9 rounded-lg border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700">
+            <option value="last_7d">Last 7 days</option>
+            <option value="last_30d">Last 30 days</option>
+          </select>
+          <button type="button" aria-label="Refresh insights" title="Refresh insights" disabled={state === "LOADING" || !status.connected || !accountId} onClick={() => setRetry((value) => value + 1)} className="grid h-9 w-9 place-items-center rounded-lg border border-slate-200 bg-white text-slate-600 disabled:opacity-40"><FiRefreshCw /></button>
+        </div>
+      </div>
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+        <MetricCard icon={FiTarget} label="Campaigns" value={campaignCount} helper="Saved on this browser" />
+        <MetricCard icon={FiUsers} label="Reach" value={metric("reach")} helper="People reached" loading={state === "LOADING"} />
+        <MetricCard icon={FiEye} label="Impressions" value={metric("impressions")} helper="Times ads were shown" loading={state === "LOADING"} />
+        <MetricCard icon={FiBarChart2} label="Clicks" value={metric("clicks")} helper="All ad clicks" loading={state === "LOADING"} />
+        <MetricCard icon={FiClock} label="Spend" value={spend} helper={currency || "Account currency"} loading={state === "LOADING"} />
+        <MetricCard icon={FiUsers} label="Leads" value={metric("leads")} helper={available && data.metrics.leads === null ? "Not reported by Meta" : "Meta-reported leads"} loading={state === "LOADING"} />
+      </div>
+      {message && (
+        <div role="status" className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-600">
+          <p className="min-w-0 break-words">{message}</p>
+          {reconnect ? <Button onClick={onConnect} className="bg-blue-600 text-white"><FiZap />{state === "NOT_CONNECTED" ? "Connect Meta" : "Reconnect Meta"}</Button> : state === "NO_AD_ACCOUNT" ? (
+            <a href="#smart-ads-meta-connection" className="font-bold text-blue-600">Select Ad Account</a>
+          ) : !["LOADING", "NO_ACTIVITY"].includes(state) ? (
+            <Button onClick={() => state === "CONNECTION_ERROR" ? onRefresh() : setRetry((value) => value + 1)} className="border border-slate-200 bg-white text-slate-700"><FiRefreshCw />Retry</Button>
+          ) : null}
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -908,21 +995,6 @@ function SmartAds() {
   const estimatedBudget = Math.max(Number(form.dailyBudget) || 0, 0) * Math.max(Number(form.durationDays) || 0, 0);
   const endDate = addDays(form.startDate, form.durationDays);
   const metaReadiness = useMemo(() => resolveMetaReadiness(metaStatus, metaAssets, metaSelection), [metaStatus, metaAssets, metaSelection]);
-
-  const metrics = useMemo(
-    () =>
-      campaigns.reduce(
-        (totals, campaign) => ({
-          campaigns: totals.campaigns + 1,
-          reach: totals.reach + (Number(campaign.analytics?.reach) || 0),
-          clicks: totals.clicks + (Number(campaign.analytics?.clicks) || 0),
-          spend: totals.spend + (Number(campaign.analytics?.spend) || 0),
-          leads: totals.leads + (Number(campaign.analytics?.leads) || 0),
-        }),
-        { campaigns: 0, reach: 0, clicks: 0, spend: 0, leads: 0 },
-      ),
-    [campaigns],
-  );
 
   const filteredCampaigns = filter === "all" ? campaigns : campaigns.filter((campaign) => campaign.status === filter);
 
@@ -1805,7 +1877,7 @@ function SmartAds() {
             ))}
           </div>
           <div className="mt-5 rounded-lg bg-blue-50 p-3 text-xs font-bold leading-5 text-blue-700">
-            Publishing creates real Meta objects in paused state using the selected Facebook Page and Ad Account. Insights are not connected yet.
+            Publishing creates real Meta objects in paused state using the selected Facebook Page and Ad Account.
           </div>
         </Card>
       </div>
@@ -1896,20 +1968,14 @@ function SmartAds() {
 
         {toast && <div className="rounded-lg border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm font-black text-emerald-700">{toast}</div>}
 
-        <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-          <MetricCard icon={FiTarget} label="Campaigns" value={metrics.campaigns} helper="Saved prototype campaigns" />
-          <MetricCard icon={FiEye} label="Ad Views / Reach" value={metrics.reach.toLocaleString("en-IN")} helper="Demo analytics" />
-          <MetricCard icon={FiBarChart2} label="Ad Clicks" value={metrics.clicks.toLocaleString("en-IN")} helper="Demo analytics" />
-          <MetricCard icon={FiClock} label="Ad Spend" value={formatCurrency(metrics.spend)} helper="No payment processed" />
-          <MetricCard icon={FiUsers} label="Leads / Results" value={metrics.leads.toLocaleString("en-IN")} helper="Demo analytics" />
-        </section>
+        <MetaInsights status={metaStatus} connectionError={metaError} campaignCount={campaigns.length} onConnect={handleConnectMeta} onRefresh={refreshMetaConnection} />
 
         <section className="grid gap-5 lg:grid-cols-[1fr_330px]">
           <Card className="p-5 shadow-sm">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <h2 className="text-lg font-black text-slate-950">Campaigns</h2>
-                <p className="mt-1 text-sm font-semibold text-slate-500">Campaigns are stored locally until Meta integration is configured.</p>
+                <p className="mt-1 text-sm font-semibold text-slate-500">Campaign records saved on this browser.</p>
               </div>
               <div className="flex flex-wrap gap-2">
                 {statusFilters.map((item) => (
@@ -1950,9 +2016,6 @@ function SmartAds() {
                         <span>Location: {campaign.audience.panIndia ? "Pan India" : campaign.audience.locations.join(", ") || "Not set"}</span>
                         <span>Budget: {formatCurrency(campaign.budget.dailyBudget)} / day</span>
                         <span>Duration: {campaign.budget.durationDays} days</span>
-                        <span>Reach: {campaign.analytics.reach.toLocaleString("en-IN")}</span>
-                        <span>Clicks: {campaign.analytics.clicks.toLocaleString("en-IN")}</span>
-                        <span>Spend: {formatCurrency(campaign.analytics.spend)}</span>
                         <span>Created: {formatDate(campaign.createdAt?.slice(0, 10))}</span>
                         {campaign.meta?.campaignId && <span>Meta Campaign: {campaign.meta.campaignId}</span>}
                         {campaign.meta?.videoId && <span>Meta Video: {campaign.meta.videoId}</span>}
@@ -1986,7 +2049,7 @@ function SmartAds() {
             </div>
           </Card>
 
-          <div className="space-y-5">
+          <div id="smart-ads-meta-connection" className="space-y-5 scroll-mt-4">
             <MetaConnectionCard
               status={metaStatus}
               assets={metaAssets}
@@ -2007,7 +2070,7 @@ function SmartAds() {
                 <li>- Uses shared inventory items for product campaigns.</li>
                 <li>- Reuses Marketing Studio templates and session designs.</li>
                 <li>- Stores campaigns as frontend prototype data.</li>
-                <li>- Real Meta launch and analytics come later.</li>
+                <li>- Insights cover all ads in the selected Meta Ad Account.</li>
               </ul>
             </Card>
           </div>

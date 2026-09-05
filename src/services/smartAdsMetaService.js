@@ -16,6 +16,13 @@ export async function getMetaConnectionStatus() {
   return readJsonResponse(response, "Unable to load Meta connection status.");
 }
 
+export async function getMetaAdsInsights({ datePreset = "last_30d", signal } = {}) {
+  const url = new URL(`${API_BASE_URL}/api/meta/ads/insights`);
+  url.searchParams.set("datePreset", datePreset);
+  const response = await fetch(url.toString(), { signal, cache: "no-store" });
+  return readJsonResponse(response, "Unable to load Meta advertising activity.");
+}
+
 export function startMetaConnection() {
   window.location.assign(`${API_BASE_URL}/api/auth/meta`);
 }
